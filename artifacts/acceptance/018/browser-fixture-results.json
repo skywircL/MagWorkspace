@@ -1,0 +1,121 @@
+{
+  "fixture": true,
+  "scope": "Chromium DOM and HTTP fixture behavior; no real auth, database, Harness, indexing service or model provider",
+  "started_at": "2026-10-17T06:32:39.773Z",
+  "checks": [
+    {
+      "name": "login renders current assets with CSP and synthetic account",
+      "status": "passed"
+    },
+    {
+      "name": "page reload restores cookie login and selected workspace",
+      "status": "passed"
+    },
+    {
+      "name": "temporary startup auth failure keeps cookie and retry restores login",
+      "status": "passed"
+    },
+    {
+      "name": "document totals, current index states and malicious title are literal",
+      "status": "passed"
+    },
+    {
+      "name": "upload opens and cancels without a document POST",
+      "status": "passed"
+    },
+    {
+      "name": "content search and clear preserve untrusted text",
+      "status": "passed"
+    },
+    {
+      "name": "raw document preview remains literal text",
+      "status": "passed"
+    },
+    {
+      "name": "workspace switch disables upload for viewer and restores owner",
+      "status": "passed"
+    },
+    {
+      "name": "new session and suggestion fill composer without sending",
+      "status": "passed"
+    },
+    {
+      "name": "rejected message POST preserves draft and never retries",
+      "status": "passed"
+    },
+    {
+      "name": "SSE completion reconciles durable history and clears accepted input",
+      "status": "passed"
+    },
+    {
+      "name": "session rename and confirmed delete update UI and fixture",
+      "status": "passed"
+    },
+    {
+      "name": "suspended approval cannot approve when fixed baseline fails",
+      "status": "passed"
+    },
+    {
+      "name": "page reload restores selected session and its pending approval",
+      "status": "passed"
+    },
+    {
+      "name": "older history keeps latest suspended run and approval visible",
+      "status": "passed"
+    },
+    {
+      "name": "full session page and composer remain reachable on laptop height",
+      "status": "passed"
+    },
+    {
+      "name": "mobile documents, search and approval fit viewport",
+      "status": "passed"
+    },
+    {
+      "name": "cross-tab logout prevents delayed private text body from restoring DOM",
+      "status": "passed"
+    },
+    {
+      "name": "cross-tab logout prevents delayed private json body from restoring DOM",
+      "status": "passed"
+    },
+    {
+      "name": "cross-tab logout prevents delayed private 401 body from restoring DOM",
+      "status": "passed"
+    },
+    {
+      "name": "401 returns to login and clears private DOM content",
+      "status": "passed"
+    },
+    {
+      "name": "logout clears cookie and remains logged out after reload",
+      "status": "passed"
+    },
+    {
+      "name": "no JavaScript errors, external requests or unhandled fixture routes",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "desktop-login.png",
+    "desktop-documents.png",
+    "desktop-chat.png",
+    "desktop-approval.png",
+    "laptop-chat.png",
+    "mobile-documents.png",
+    "mobile-chat.png"
+  ],
+  "source_sha256": {
+    "index.html": "5c299c4aed0e31eeaf5cb879ad12027eebd8a7d2b6915c74522b0062746c477b",
+    "app.js": "316341e12cf005617fbd55d2549a4d3dfbf91a45348b888bb063f601ec233d7d",
+    "core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+    "style.css": "6dd5fffccf2ca22f449c117a472be853c187dda13f3b80cf142bf36d0020b963"
+  },
+  "status": "passed",
+  "finished_at": "2026-10-17T06:32:46.199Z",
+  "request_counts": {
+    "total": 279,
+    "message_posts": 3,
+    "unexpected": 0
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "checks": [
+    "public config default 50 MB",
+    "exact 50 MB upload accepted",
+    "50 MB MinIO download matches SHA256",
+    "index ready: ",
+    "large DOCX lexical searchable",
+    "large DOCX vector searchable",
+    "large DOCX hybrid searchable",
+    "oversize create leaves no document",
+    "oversize replace preserves head",
+    "index ready: ",
+    "replacement above 8 MB preserved",
+    "original 50 MB version immutable after replacement",
+    "index failed: extraction_limit",
+    "extraction budget remains separate from upload cap"
+  ],
+  "paid_model_calls": 0
+}

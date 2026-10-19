@@ -1,0 +1,53 @@
+{
+  "status": "passed",
+  "recorded_at": "2026-10-17T14:02:34.583912+08:00",
+  "environment": "independent disposable Docker Compose project with real MySQL, MinIO, Elasticsearch, Tika, Ollama bge-m3; original application volumes untouched",
+  "command": "MAGWORKSPACE_ACCEPTANCE_DIR=<private temp directory> python3 scripts/acceptance-stack.py start",
+  "checks": [
+    "Docker Compose infrastructure healthy",
+    "bge-m3 real cached model available",
+    "TestMinIOLive",
+    "TestParserRealTika PDF/DOCX/embedded attachment/oversized extraction",
+    "synthetic multipart upload original-byte integrity and asynchronous ready",
+    "real Chinese lexical/vector/hybrid retrieval",
+    "rename retains published index",
+    "inline-edit compare-and-swap",
+    "immutable historical bytes and citation",
+    "current-head-only retrieval",
+    "soft delete hides results"
+  ],
+  "paid_chat_model_calls": 0,
+  "evidence": "Real command log checked before cleanup; public results preserved, all private acceptance temp files removed after successful final browser checks",
+  "script_sha256": {
+    "scripts/smoke-indexing.py": "76c6096861fe3ab89b48b7ff0166744e99efce6120affa408fb1cf4bc7859085"
+  },
+  "backend_rebuild": {
+    "status": "passed",
+    "command": "MAGWORKSPACE_ACCEPTANCE_DIR=<same private temp directory> python3 scripts/acceptance-stack.py rebuild",
+    "checks": [
+      "current backend image rebuilt without recreating dependencies",
+      "synthetic data retained",
+      "readyz returns 200 at refreshed random loopback port"
+    ],
+    "recorded_at": "2026-10-17T14:32:10.859565+08:00",
+    "purpose": "final frozen frontend auth-epoch guards after body/error response reads included; no chat-model rerun because server/agent business paths are unchanged",
+    "asset_sha256": {
+      "internal/webui/assets/app.js": "316341e12cf005617fbd55d2549a4d3dfbf91a45348b888bb063f601ec233d7d",
+      "internal/webui/assets/core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+      "internal/webui/assets/index.html": "5c299c4aed0e31eeaf5cb879ad12027eebd8a7d2b6915c74522b0062746c477b",
+      "internal/webui/assets/style.css": "6dd5fffccf2ca22f449c117a472be853c187dda13f3b80cf142bf36d0020b963"
+    }
+  },
+  "cleanup": {
+    "status": "passed",
+    "recorded_at": "2026-10-17T14:34:45.344573+08:00",
+    "command": "MAGWORKSPACE_ACCEPTANCE_DIR=<same private temp directory> python3 scripts/acceptance-stack.py stop",
+    "isolated_containers_remaining": 0,
+    "synthetic_volumes_remaining": 0,
+    "shared_model_cache_preserved": true,
+    "private_environment_browser_fixture_state_and_logs_removed": true,
+    "private_temp_directory_removed": true,
+    "existing_8080_5173_services": "untouched by acceptance cleanup",
+    "public_results": "preserved"
+  }
+}

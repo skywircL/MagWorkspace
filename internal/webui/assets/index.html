@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#f7f8fa" />
+    <title>MagWorkspace · 个人知识工作台</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div id="notice" role="status" aria-live="polite"></div>
+    <section id="auth-restoring" class="restoring" aria-label="恢复登录">
+      <div class="brand"><b class="brand-mark" aria-hidden="true">M</b><span>MagWorkspace</span></div>
+      <p id="restore-message" role="status">正在恢复登录状态…</p>
+      <button id="retry-auth" class="primary" hidden>重试连接</button>
+      <button id="use-login" class="text-button" hidden>返回登录</button>
+    </section>
+    <section id="auth" class="auth" aria-label="账号登录" hidden>
+      <div class="auth-story">
+        <div class="brand"><b class="brand-mark" aria-hidden="true">M</b><span>MagWorkspace</span></div>
+        <div class="auth-story-content">
+          <p class="eyebrow">A SPACE FOR YOUR KNOWLEDGE</p>
+          <h1>让每一份知识，<br />都有新的可能。</h1>
+          <p class="auth-lead">把散落的资料汇聚在一处。<br />从可信的来源出发，与 Agent 一起思考。</p>
+          <div class="knowledge-visual" aria-hidden="true">
+            <div class="visual-grid"></div>
+            <div class="visual-note note-back"><span class="note-tag">MD</span><span class="note-line"></span><span class="note-line short"></span></div>
+            <div class="visual-note note-front"><span class="note-tag">知识笔记</span><span class="note-line"></span><span class="note-line"></span><span class="note-line short"></span><span class="note-check">✓ 已连接你的知识</span></div>
+            <div class="visual-spark">✦</div>
+            <div class="visual-label"><span class="status-dot"></span> 资料 · 灵感 · 行动</div>
+          </div>
+        </div>
+        <small class="auth-story-footer">你的资料，你的空间，你的思考。</small>
+      </div>
+      <div class="auth-panel">
+        <div class="auth-form-wrap">
+          <span class="auth-kicker">开始你的知识之旅</span>
+          <h2>欢迎来到工作台</h2>
+          <p class="muted">登录账号，继续整理与探索你的知识。</p>
+          <form id="auth-form">
+            <label>邮箱地址<input name="email" type="email" autocomplete="username" placeholder="you@example.com" required /></label>
+            <label>密码<input name="password" type="password" autocomplete="current-password" placeholder="输入密码（至少 12 位）" minlength="12" required /></label>
+            <label id="name-label" hidden>你的名字<input name="name" autocomplete="name" placeholder="怎么称呼你？" maxlength="100" /></label>
+            <button class="primary" type="submit" id="auth-submit">登录工作台 <span aria-hidden="true">→</span></button>
+            <button type="button" id="auth-toggle" class="text-button">还没有账号？注册</button>
+          </form>
+          <div class="auth-privacy"><span aria-hidden="true">◇</span><small>登录后可自动恢复会话，使用共享设备时请退出登录。</small></div>
+        </div>
+        <small class="auth-footer">MagWorkspace · 个人知识工作台</small>
+      </div>
+    </section>
+    <div id="shell" hidden>
+      <aside class="sidebar">
+        <div class="brand"><b class="brand-mark" aria-hidden="true">M</b><span>MagWorkspace</span></div>
+        <div class="workspace-block">
+          <label class="eyebrow" for="workspace">工作空间</label>
+          <select id="workspace" aria-label="工作空间"></select>
+          <button id="new-workspace" class="text-button"><span aria-hidden="true">＋</span> 新建工作空间</button>
+        </div>
+        <nav aria-label="主导航">
+          <p class="nav-caption">工作台</p>
+          <button id="nav-docs" class="active"><span class="nav-icon" aria-hidden="true">▤</span>文档知识库<span class="nav-arrow" aria-hidden="true">›</span></button>
+          <button id="nav-chat"><span class="nav-icon" aria-hidden="true">◷</span>Agent 会话<span class="nav-arrow" aria-hidden="true">›</span></button>
+        </nav>
+        <div class="sidebar-tip"><span class="tip-symbol" aria-hidden="true">✦</span><p>从资料到答案</p><small>上传文档，让每一次提问<br />都能找到可信的依据。</small></div>
+        <div class="side-bottom">
+          <div class="identity-row"><span class="avatar" aria-hidden="true">M</span><span id="identity"></span></div>
+          <button id="logout" class="text-button">退出登录 <span aria-hidden="true">↗</span></button>
+        </div>
+      </aside>
+      <main>
+        <div class="topbar"><div class="breadcrumb">工作空间 <span aria-hidden="true">/</span> <span id="workspace-name">我的工作空间</span></div><span id="activity" role="status" hidden><span class="status-dot"></span>正在处理…</span></div>
+        <header class="page-header">
+          <div><h1 id="page-title">文档知识库</h1><p id="page-description">汇集你的资料，让知识随时可查、有据可循。</p></div>
+          <span class="pill role-pill" id="role"></span>
+        </header>
+        <section id="docs-view" aria-label="文档知识库">
+          <div class="intro">
+            <div class="intro-icon" aria-hidden="true">▤</div>
+            <div class="intro-copy"><p class="eyebrow">YOUR KNOWLEDGE, CONNECTED</p><h2>让资料成为你的知识底座</h2><p>支持文档上传、内容检索与版本追溯，和 Agent 一起发现资料中的答案。</p></div>
+            <button id="show-upload" class="primary"><span aria-hidden="true">＋</span> 上传文档</button>
+          </div>
+          <div class="knowledge-panel">
+            <div class="panel-heading"><div class="heading-with-count"><h2 id="doc-list-heading">全部文档</h2><span id="doc-total" class="count">0</span></div><button id="refresh-docs" class="small quiet"><span aria-hidden="true">↻</span> 刷新</button></div>
+            <form id="search-form" class="search-toolbar">
+              <div class="search-input"><span aria-hidden="true">⌕</span><input name="query" aria-label="检索知识库" placeholder="搜索文档中的内容…" required /><button id="clear-search" type="button" class="icon-button" aria-label="清除检索" hidden>×</button></div>
+              <select name="mode" aria-label="检索方式"><option value="hybrid">混合检索</option><option value="lexical">关键词</option><option value="vector">语义检索</option></select>
+              <button type="submit" class="search-submit">检索 <span aria-hidden="true">→</span></button>
+            </form>
+            <p id="search-summary" class="search-summary" aria-live="polite"></p>
+            <div id="search-results"></div>
+            <div id="doc-columns" class="document-list-head" aria-hidden="true"><span>文档名称</span><span>索引状态</span><span>操作</span></div>
+            <div id="documents" class="cards"></div>
+            <div id="doc-pages" class="pager"></div>
+          </div>
+          <p class="section-note"><span aria-hidden="true">◇</span> 文档在当前工作空间内共享，每次内容更新都会保留独立版本。</p>
+        </section>
+        <section id="chat-view" aria-label="Agent 会话" hidden>
+          <div class="chat-layout">
+            <div class="sessions">
+              <button id="new-session" class="primary"><span aria-hidden="true">＋</span> 新建会话</button>
+              <div class="sessions-heading"><span>我的会话</span><span id="session-total" class="count">0</span></div>
+              <div id="sessions"></div>
+              <div id="session-pages" class="pager"></div>
+              <p class="sessions-note"><span aria-hidden="true">◇</span> 会话仅对你可见</p>
+            </div>
+            <div class="conversation">
+              <div class="conversation-header"><div><span class="conversation-eyebrow">AGENT</span><h2 id="session-title">开始一段新对话</h2></div><div class="conversation-actions"><button id="rename-session" class="small quiet" disabled>重命名</button><button id="delete-session" class="small quiet danger" disabled>删除</button><button id="refresh-chat" class="small quiet" aria-label="刷新会话状态">↻</button></div></div>
+              <div class="conversation-content conversation-scroll">
+                <div id="chat-welcome" class="chat-welcome">
+                  <div class="welcome-mark" aria-hidden="true">✦</div>
+                  <p class="eyebrow">THINK WITH YOUR KNOWLEDGE</p>
+                  <h2>你的知识，随时对话。</h2>
+                  <p>从一个问题开始。Agent 会查找当前空间的资料，<br class="desktop-break" />帮你整理思路，并让答案回到具体来源。</p>
+                  <div class="suggestions"><button type="button" data-suggestion="请概览当前知识库中的文档，并总结主要主题。"><span aria-hidden="true">▤</span><strong>了解知识库</strong><small>概览资料与主要主题</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button><button type="button" data-suggestion="请帮我从知识库中查找与我的问题相关的资料，并说明来源。"><span aria-hidden="true">⌕</span><strong>寻找资料依据</strong><small>从文档中发现线索</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button><button type="button" data-suggestion="请帮我梳理现有资料中的关键要点，并整理成一份笔记草稿。"><span aria-hidden="true">✎</span><strong>整理知识笔记</strong><small>把关键信息串联起来</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button></div>
+                  <small class="welcome-hint">选择或新建会话，即可开始。</small>
+                </div>
+                <div id="message-pages" class="pager"></div>
+                <div id="messages" aria-label="对话消息"></div>
+                <div id="draft" class="message assistant draft" hidden></div>
+                <div id="run-state"></div>
+                <div id="prompt"></div>
+              </div>
+              <div class="conversation-jump"><button id="jump-latest" type="button" hidden>↓ 回到最新消息</button></div>
+              <form id="chat-form">
+                <label for="query" class="sr-only">发送消息</label><textarea id="query" rows="2" maxlength="64000" placeholder="向你的知识库提问，或请 Agent 帮你整理资料…" required></textarea>
+                <div class="composer-bottom"><small id="composer-hint">Ctrl / ⌘ + Enter 发送 · Enter 换行</small><div><button id="stop" type="button" hidden>停止生成</button><button class="primary" id="send">发送 <span aria-hidden="true">↑</span></button></div></div>
+              </form>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+    <dialog id="upload-dialog" class="upload-dialog" aria-labelledby="upload-title">
+      <div class="dialog-heading"><div><p class="eyebrow">BUILD YOUR KNOWLEDGE</p><h2 id="upload-title">上传文档</h2></div><button id="close-upload" type="button" class="icon-button" aria-label="关闭上传">×</button></div>
+      <p class="muted">添加一份资料，开始连接你的知识。上传后会自动解析并建立索引。</p>
+      <form id="upload-form">
+        <label>文档标题 <span class="muted">（可选）</span><input name="title" placeholder="默认使用文件名" /></label>
+        <label class="upload-drop"><span class="upload-symbol" aria-hidden="true">↑</span><strong>选择要上传的文档</strong><small>TXT、Markdown、PDF 或 Word 文档</small><input name="file" type="file" required accept=".txt,.md,.markdown,.pdf,.docx" /></label>
+        <p class="muted" id="upload-limit">正在读取文件上传限制…</p>
+        <button class="primary upload-submit" type="submit">上传并建立索引 <span aria-hidden="true">→</span></button>
+      </form>
+    </dialog>
+    <dialog id="detail" aria-labelledby="detail-title">
+      <div class="toolbar dialog-heading"><h2 id="detail-title"></h2><button id="close-detail" type="button" class="quiet" aria-label="关闭详情">关闭 ×</button></div>
+      <div id="detail-body"></div>
+    </dialog>
+  </body>
+</html>

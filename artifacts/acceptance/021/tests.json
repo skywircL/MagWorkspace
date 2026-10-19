@@ -1,0 +1,15 @@
+{
+  "bridge_all": {
+    "passed_tests_including_subtests": 236,
+    "skipped_tests": [],
+    "failed": [],
+    "exit_code": 0
+  },
+  "history_integration": {
+    "passed_tests_including_subtests": 53,
+    "skipped_tests": [],
+    "failed": [],
+    "exit_code": 0
+  },
+  "vet_build_gofmt": "passed"
+}

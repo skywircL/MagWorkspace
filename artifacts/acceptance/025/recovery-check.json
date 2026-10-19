@@ -1,0 +1,14 @@
+{
+  "status": "background_resumed",
+  "failed_document": "1428840",
+  "retry": "ready",
+  "index_workers": 1,
+  "embedding_request_timeout": "5m",
+  "profile_unchanged": true,
+  "queue": {
+    "queued": 4429,
+    "ready": 749,
+    "running": 5
+  },
+  "full_evaluation_completed": false
+}

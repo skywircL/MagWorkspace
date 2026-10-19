@@ -1,0 +1,17 @@
+test_callbacks_bind_to_exact_configured_origin (__main__.ConfigurationTests.test_callbacks_bind_to_exact_configured_origin) ... ok
+test_settings_and_legacy_duration_compatibility (__main__.ConfigurationTests.test_settings_and_legacy_duration_compatibility) ... ok
+test_asgi_cancellation_reaps_before_return (__main__.HTTPTests.test_asgi_cancellation_reaps_before_return) ... ok
+test_auth_protocol_and_strict_json_before_spawn (__main__.HTTPTests.test_auth_protocol_and_strict_json_before_spawn) ... ok
+test_busy_and_duplicate_runs_are_not_retried (__main__.HTTPTests.test_busy_and_duplicate_runs_are_not_retried) ... ok
+test_cancellation_while_spawn_completes_still_reaps (__main__.HTTPTests.test_cancellation_while_spawn_completes_still_reaps) ... ok
+test_disabled_mode_and_successful_json_environment (__main__.HTTPTests.test_disabled_mode_and_successful_json_environment) ... ok
+test_real_tcp_stream_disconnect_kills_and_reaps_child (__main__.HTTPTests.test_real_tcp_stream_disconnect_kills_and_reaps_child) ... ok
+test_request_body_time_counts_toward_execution_deadline (__main__.HTTPTests.test_request_body_time_counts_toward_execution_deadline) ... ok
+test_sse_terminal_requires_successful_exit (__main__.HTTPTests.test_sse_terminal_requires_successful_exit) ... ok
+test_stream_limits_include_wire_encoding_and_reap (__main__.HTTPTests.test_stream_limits_include_wire_encoding_and_reap) ... ok
+test_timeout_oversize_stderr_and_unavailable_are_safe (__main__.HTTPTests.test_timeout_oversize_stderr_and_unavailable_are_safe) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 1.165s
+
+OK

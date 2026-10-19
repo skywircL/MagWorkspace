@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "base_url": "http://127.0.0.1:8080",
+  "active_work_before_restart": 0,
+  "schema_and_business_counts_preserved": true,
+  "frontend_matches_current_source": {
+    "index.html": "5c299c4aed0e31eeaf5cb879ad12027eebd8a7d2b6915c74522b0062746c477b",
+    "app.js": "316341e12cf005617fbd55d2549a4d3dfbf91a45348b888bb063f601ec233d7d",
+    "core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+    "style.css": "6dd5fffccf2ca22f449c117a472be853c187dda13f3b80cf142bf36d0020b963"
+  },
+  "checks": [
+    "readyz",
+    "healthz",
+    "config",
+    "current frontend assets"
+  ],
+  "original_failed_run_recovered": false,
+  "deployed_bridge_matches_source": {
+    "bridge.py": "f088c9541facad087325976d2ab29c241aaa275166376d44943563bb6255f480",
+    "citations.py": "7ac09b68cfca93552266cde19f129357e78088532c45538c5fc42bf76eda75a1",
+    "persistence.py": "76c258e82ad677bfbf2967ec77257701669616f272f3bce50b91ff37129896f0"
+  },
+  "running_image_matches_build": true,
+  "development_proxy_api": "passed"
+}

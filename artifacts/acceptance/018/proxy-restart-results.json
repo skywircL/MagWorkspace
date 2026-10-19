@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "backend": "http://127.0.0.1:8080",
+  "frontend": "http://127.0.0.1:5173",
+  "checks": {
+    "same_origin_without_cookie": 401,
+    "cross_origin": 403
+  }
+}

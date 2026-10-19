@@ -1,0 +1,7 @@
+{
+  "bridges/magent/model_context.py": "5a231379adebdab21285a9e92743f9d132ca4025f69e06bc4caee61f8b6b51c4",
+  "bridges/magent/bridge.py": "cb62ec93cf02ffb37efe7aea855586e4b95caf2ae7c72d4929257a092c18eafd",
+  "internal/agent/model_context_test.go": "e4676756628f5c0535ab3513369b1ec37783d221f64c9f597d60899ce5afb927",
+  "internal/agent/workspace_tools_test.go": "fc1a09f106b82260699ac7a4101943e3cf5adf929cded3dd8117e59fa49e5eeb",
+  "internal/httpapi/citation_aliases_harness_integration_test.go": "38a61e6de8ae3914e143fa189689b47224bd0fc33a4c302cec78233ccbc78ce9"
+}

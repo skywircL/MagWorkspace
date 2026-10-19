@@ -1,0 +1,13 @@
+{
+  "corpus_id": "1428840",
+  "before_status": "failed",
+  "before_error_code": "embedding_unavailable",
+  "profile_id": "1bcc8c76d9e23aaccca40b0b35db50108914bef717aa1a6bda5eea92fa5a514a",
+  "index_id": "b65f0411ac84f54d8e9744cb79f42444",
+  "retried": true,
+  "status": "ready",
+  "error_code": null,
+  "attempts": 2,
+  "chunk_count": 6,
+  "checked_at": "2026-10-17T15:37:04.005186+00:00"
+}

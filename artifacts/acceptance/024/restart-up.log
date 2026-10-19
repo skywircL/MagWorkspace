@@ -1,0 +1,15 @@
+time="2026-10-17T22:37:59+08:00" level=warning msg="volume \"magworkspace_ollama-models\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+ Volume magworkspace_qdrant-data Creating 
+ Volume magworkspace_qdrant-data Creating 
+ Volume magworkspace_qdrant-data Created 
+ Volume magworkspace_qdrant-data Created 
+ Container magworkspace-qdrant-1 Creating 
+ Container magworkspace-qdrant-1 Created 
+ Container magworkspace-backend-1 Recreate 
+ Container magworkspace-backend-1 Recreated 
+ Container magworkspace-qdrant-1 Starting 
+ Container magworkspace-qdrant-1 Started 
+ Container magworkspace-qdrant-1 Waiting 
+ Container magworkspace-qdrant-1 Healthy 
+ Container magworkspace-backend-1 Starting 
+ Container magworkspace-backend-1 Started 

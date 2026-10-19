@@ -1,0 +1,584 @@
+{
+  "bootstrap_samples": 10000,
+  "chunk_ranking_parity": false,
+  "corpus_verification": {
+    "baseline": {
+      "after": {
+        "checked_at": "2026-10-17T18:17:16.362716+00:00",
+        "documents": 5183,
+        "indexes": 5183,
+        "status": "passed"
+      },
+      "before": {
+        "checked_at": "2026-10-17T18:12:30.880636+00:00",
+        "documents": 5183,
+        "indexes": 5183,
+        "status": "passed"
+      },
+      "mode": "indexes"
+    },
+    "candidate": {
+      "after": {
+        "checked_at": "2026-10-17T18:17:16.362716+00:00",
+        "documents": 5183,
+        "indexes": 5183,
+        "status": "passed"
+      },
+      "before": {
+        "checked_at": "2026-10-17T18:12:30.880636+00:00",
+        "documents": 5183,
+        "indexes": 5183,
+        "status": "passed"
+      },
+      "mode": "indexes"
+    }
+  },
+  "dataset": {
+    "content_policy": "beir-title-text-cc-space-v1",
+    "control_normalization": {
+      "characters": 5,
+      "documents": 2
+    },
+    "counts": {
+      "corpus": 5183,
+      "evaluated_queries": 300,
+      "judgments": 339,
+      "queries_file": 1109
+    },
+    "input_sha256": {
+      "corpus": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+      "qrels": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c",
+      "queries": "8ff84a7c903f722981cd8d595c022660140c51867b27608a6d4910db86080313"
+    },
+    "normalized_content_sha256": "ebe0b484bf749151064933cd4267ba0833ced949d3f84715f05cc47a328c07cb",
+    "queries_over_512_bytes": 0,
+    "query_max_utf8_bytes": 204,
+    "split": "test"
+  },
+  "delta_candidate_minus_baseline": {
+    "MAP@10": {
+      "ci95": [
+        0.003338438051146385,
+        0.06102212522045853
+      ],
+      "mean": 0.03265022045855379
+    },
+    "MRR@10": {
+      "ci95": [
+        -0.0042257605820105815,
+        0.05523584656084656
+      ],
+      "mean": 0.026130952380952383
+    },
+    "Precision@10": {
+      "ci95": [
+        -0.0013333333333333337,
+        0.007666666666666666
+      ],
+      "mean": 0.003
+    },
+    "Recall@10": {
+      "ci95": [
+        -0.0019999999999999996,
+        0.07183333333333333
+      ],
+      "mean": 0.03327777777777778
+    },
+    "Recall@20": {
+      "ci95": [
+        -0.000945833333333332,
+        0.06344444444444446
+      ],
+      "mean": 0.03061111111111111
+    },
+    "Recall@5": {
+      "ci95": [
+        -0.011666666666666667,
+        0.06166666666666667
+      ],
+      "mean": 0.024777777777777777
+    },
+    "nDCG@10": {
+      "ci95": [
+        0.005439312413824683,
+        0.056985835875302523
+      ],
+      "mean": 0.03156766898272648
+    }
+  },
+  "environment_frozen": true,
+  "execution": {
+    "baseline": "qdrant_native",
+    "candidate": "qdrant_native"
+  },
+  "latency_caveat": "Sequential runs can differ in cache warmth/load/order; latency is descriptive, not a controlled causal estimate.",
+  "latency_ms": {
+    "baseline": {
+      "mean": 165.4211390427857,
+      "p50": 156.95722900272813,
+      "p95": 225.49203365633733
+    },
+    "candidate": {
+      "mean": 179.00053984553475,
+      "p50": 171.06545850401744,
+      "p95": 225.45919613912702
+    }
+  },
+  "manifests": {
+    "baseline": {
+      "api_base": "http://127.0.0.1:55103/api/v1",
+      "chunk_limit": 50,
+      "corpus_verification": "indexes",
+      "dataset": {
+        "content_policy": "beir-title-text-cc-space-v1",
+        "control_normalization": {
+          "characters": 5,
+          "documents": 2
+        },
+        "counts": {
+          "corpus": 5183,
+          "evaluated_queries": 300,
+          "judgments": 339,
+          "queries_file": 1109
+        },
+        "input_sha256": {
+          "corpus": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+          "qrels": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c",
+          "queries": "8ff84a7c903f722981cd8d595c022660140c51867b27608a6d4910db86080313"
+        },
+        "normalized_content_sha256": "ebe0b484bf749151064933cd4267ba0833ced949d3f84715f05cc47a328c07cb",
+        "queries_over_512_bytes": 0,
+        "query_max_utf8_bytes": 204,
+        "split": "test"
+      },
+      "environment_freeze": {
+        "content_sha256": "ee173701ec5e08743b2130dee9c26043b836565233ddbabea585777116e81e4f",
+        "file_sha256": "57a0a7fab746f639ca379ed94de52facca98798821bb24e695603a61a9667b81",
+        "value": {
+          "measured_environment": {
+            "application_sha256": "74de0064d22ab12fef06181b42354d3f447bbff7d8710249f075230bfa3e32c5",
+            "config": {
+              "hnsw_config": {
+                "ef_construct": 100,
+                "full_scan_threshold": 10000,
+                "m": 16,
+                "max_indexing_threads": 0,
+                "on_disk": false
+              },
+              "optimizer_config": {
+                "default_segment_number": 0,
+                "deleted_threshold": 0.2,
+                "flush_interval_sec": 5,
+                "indexing_threshold": 10000,
+                "max_optimization_threads": null,
+                "max_segment_size": null,
+                "memmap_threshold": null,
+                "vacuum_min_vector_number": 1000
+              },
+              "params": {
+                "on_disk_payload": true,
+                "replication_factor": 1,
+                "shard_number": 1,
+                "sparse_vectors": {
+                  "bm25": {
+                    "modifier": "idf"
+                  }
+                },
+                "vectors": {
+                  "dense": {
+                    "datatype": "float32",
+                    "distance": "Cosine",
+                    "size": 1024
+                  }
+                },
+                "write_consistency_factor": 1
+              },
+              "quantization_config": null,
+              "wal_config": {
+                "wal_capacity_mb": 32,
+                "wal_retain_closed": 1,
+                "wal_segments_ahead": 0
+              }
+            },
+            "corpus_sha256": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+            "embedding_model": {
+              "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+              "name": "bge-m3:567m"
+            },
+            "engine": "qdrant_native",
+            "indexed_vectors_count": 25433,
+            "points_count": 12933,
+            "points_sha256": "d7699e490ffd88591ddb5eba9113cbf77e4397fdc0c9e47bd0eb89fd3c537109",
+            "profile_id": "1bcc8c76d9e23aaccca40b0b35db50108914bef717aa1a6bda5eea92fa5a514a",
+            "scope": "logical points/config and aggregate optimizer state; not a byte-identical HNSW snapshot",
+            "segments_count": 5,
+            "source_files": {
+              ".dockerignore": "fad0e1e1d5560111c29f36cfdb2016e1158254975d7fb945c91e9436b13e9593",
+              "Dockerfile": "08b8bc40178056c7324343e92e148f35b603fdb20acfcca29fceae41a4b91925",
+              "bridges/magent/bridge.py": "cb62ec93cf02ffb37efe7aea855586e4b95caf2ae7c72d4929257a092c18eafd",
+              "bridges/magent/citations.py": "7ac09b68cfca93552266cde19f129357e78088532c45538c5fc42bf76eda75a1",
+              "bridges/magent/document_writes.py": "a33207083bda5b745f8e3fc167cd385176687e7952c4b0086c175907e20998ef",
+              "bridges/magent/memory.py": "4b60a97bc7cd2aeb73219ea8fa8f2d1805185f3605f9bfdcaee15f38dcda352a",
+              "bridges/magent/model_context.py": "5a231379adebdab21285a9e92743f9d132ca4025f69e06bc4caee61f8b6b51c4",
+              "bridges/magent/persistence.py": "76c258e82ad677bfbf2967ec77257701669616f272f3bce50b91ff37129896f0",
+              "bridges/magent/prompts.py": "9a2307c1a062329ce0e2dd88ceec73fb26c2b0c24b166482d1fffecf7aed63cf",
+              "bridges/magent/requirements.txt": "f6b2b03ee6ec3a82c838eebee97b19819bd4995ceb946518dc0fb64868ad8765",
+              "bridges/magent/retrieval.py": "acb448d8cf21099c42e403e1d960d3435fcf853ea76a378639fdedcf5639718a",
+              "bridges/magent/streaming.py": "d35d39c378c7e8f4775584ba1ce4a6aeab283975cb75743c7fc4f76b956c873b",
+              "bridges/magent/workspace_tools.py": "18aabe63246dd64930a8d2ac2999f0ab448a0f43c1a5ca6948d99a90136b8ae6",
+              "cmd/server/agent_context.go": "47c37fc82bf4dd95d1cf366726a387f3df2149e5d136524fe643fc8ba08841cd",
+              "cmd/server/indexing.go": "eecd0029cb90a7ddf6739ae1f690a4804b1bc00d40ae88fcfe1dae92b9c0ba24",
+              "cmd/server/main.go": "ef3e389dc97433f69c4df2f800fa6a45e269f9602e9cfae54635cdf522f921d5",
+              "cmd/server/observability.go": "5f8e657b91bad6b1f6c9d39d26a30f7645cf94f70ee7a148075641227ed24275",
+              "cmd/server/upload_limits.go": "c93d57020853d16ed9ae093c114e222f831f8c43262ff1e7fac5ee2665886ea6",
+              "compose.observability.yaml": "827fe7b73381eb26f0eaa3212f2f4163e0adc71f20c41e30847c5f57e4aae509",
+              "compose.yaml": "039e0816590f61ab349d0f3e21aaeeff4705c9fdfe25dfb2dabe0bf2510bbdd7",
+              "docker/minio/Dockerfile": "b2f105c4d4f5aa23902a591472ffb6614f08e67f22e0e14880f35617e29f96e3",
+              "docker/tika/Dockerfile": "7965eeb08698288a178d081fa4050fc1846b59737748b3272f158c196f387529",
+              "docker/tika/tika-config.xml": "448c72734b1c76ca9b353dbda210d01f3f7cf5f98c3595ce2b8df9e2d87c9729",
+              "go.mod": "59ccffc0f0421300f69dea5c2e79ebcfbe4b80de238972d342405db23ad3678a",
+              "go.sum": "9cbd6f07f7667c42111a1c973e1da09adc2a24e6b7f0640ba631b8caa5e9d2ca",
+              "internal/agent/context.go": "bc7a2a8b7cde7827ebae80aa692c040da6e27c2adf1975600e24ecc5562debd9",
+              "internal/agent/journal.go": "8ff5351e384c1787e36b7a68d06a46bd79569d0eeeadcda01d6bfe7a5d4a30bd",
+              "internal/agent/memory.go": "1e713bc5a7c4f0a02664826de14da940ee5676efd15c77f19227e1905a63bf85",
+              "internal/agent/process.go": "15726b292e1b6b2973ba34542d270bb8636680fc82a73413810af13dc0ee6e5b",
+              "internal/agent/prompts.go": "bdedd68bead532d69fe80360e6280aa3fb689395e222f7ccc7ceb0c39cb71c37",
+              "internal/agent/stream.go": "79fbb8dbd6ace7e6c4d31a87c4c61face6434affcade504ea8f298d145d249bd",
+              "internal/agent/tools.go": "55928ca12a70ad57e27da83fa40d2a778e0a9321b1eaa0dc05e3524a64144053",
+              "internal/auth/credentials.go": "3db70db3e7434b70d3a72fd0adfc575a50ee0c5b0bb2546ed2b2bb2517171c19",
+              "internal/blob/storage.go": "16cd385d43cabb7aae64ea00c9a0244e5c58f439891e987074ee3a95011ec559",
+              "internal/domain/conversations.go": "1d2563d417cf7c3dda51bb54ed5e81a10fdff076c3d9abe7c151479765d1b418",
+              "internal/domain/document_approvals.go": "1e4309cc611bc03e48c1163f8ddb295a7df84422775d686b5397aa832a5391c8",
+              "internal/domain/documents.go": "0c1d01595ce99e00df13fcb15800ef04397c4ca067f5591c804f908a92ed82f0",
+              "internal/domain/evidence.go": "07385fc9fd8ea72982976c5d74fe8612313f179649205b53a26c161cf365adce",
+              "internal/domain/indexes.go": "1f2ce0a04ce88bd94742bef323e76d46c4ac77fa2aa7492f7abaeeb5f59ea7e2",
+              "internal/domain/memory.go": "10730f08ae57474ed4d2ed9575c200754d0417cd03645bb91dac961b97778c1d",
+              "internal/domain/models.go": "1b596143533e82e1b426a719f31bfede4e61a50965e6babed1498fb7e0e14c66",
+              "internal/domain/prompts.go": "ecb01ef5837d1e2f2707702c1f21dd7a64e7ba5020bd083b327fc8a4f3e56c8e",
+              "internal/domain/run_journals.go": "fceb78e3f8a767725d06223c553f3b7030c0e95ea93282e94295180e4c0d0e15",
+              "internal/httpapi/auth.go": "ab42846e70de7e3c076275de5599d040039d3af2e838ff81606adb6e4ed6a741",
+              "internal/httpapi/browser_auth.go": "85a476696746b419b4e16fbfa71cda3ba62959067e9afc4028375912fb3ec968",
+              "internal/httpapi/document_updates.go": "5cb83c4a360c35ae1c6a6d8b0be77cf52d806da2871b8678c756adcecea89666",
+              "internal/httpapi/documents.go": "e8dfbc81c2cd081859befdbecaea6b7ff53119914d9b2e1d3946daef7dec0f84",
+              "internal/httpapi/evidence.go": "1a69387d4a79e2ef82402a336e2cd2eb533ee3af7d86903de00f662ade77af9c",
+              "internal/httpapi/indexes.go": "fbec48473adc3e9be116ddd6b921c9ed2e90af3d4b17143905145e1ba87c3f7d",
+              "internal/httpapi/knowledge_tools.go": "3bb3628c6737c25deb3e44fb332b29f31f4ebca4788263a4580d5f8e384d6202",
+              "internal/httpapi/memory.go": "8df613be30236af4c49dc9b63756bab0b05eb377aeba1f300236cc50c82790ca",
+              "internal/httpapi/observed_agent.go": "f23d97836da3eda0eca04e918a70af4bb866d07745a843d4725dd4025fd6b268",
+              "internal/httpapi/prompts.go": "cda752ef074071345d94fa905469975f382ae06ac3c29a28fc7545806af08e49",
+              "internal/httpapi/recovery.go": "2c89eef530e9c95964dcb31f8f2ae07926bb2eab087a637ce8aa02b9f40a02f3",
+              "internal/httpapi/server.go": "d27bb45863d6b9b3108fc5015d0f87c2c7f0bd4d696fd32d5b4bcaf077810010",
+              "internal/httpapi/sessions.go": "f7bbbc908b2c13685b0060006fdac913d4b9e22088ca586fbe62cfac89826bd5",
+              "internal/httpapi/sse.go": "9265b304d3d5f459a07dc76b7e776432a5fe6dababa7e3e784bf3374458264ce",
+              "internal/httpapi/workspaces.go": "ee196a034814ea15c3e4c5e0847e92256bf2fa21f37144dba0236e7c431bc4cb",
+              "internal/indexing/chunker.go": "ddb5a6af2a692485a3e7d74727e5611d91659fa5110cf5b1783f763c2999ec08",
+              "internal/indexing/clients.go": "d54d03ad7a7a96f68f6798b80ae97763c794729a9255a96d889facbdc1eebdf6",
+              "internal/indexing/errors.go": "70396721a62d01380082907ecf4c76709933f0a8d7ccd972691a7e491541cf8a",
+              "internal/indexing/manifest.go": "d0277111db3a7b5f9e3551d8827239ea0baa929847a979d48b12f63d354f557a",
+              "internal/indexing/parser.go": "fa73c6f97777879884b473ebd782a9d0e4cbc1119c7cb642c772613f41ab3bec",
+              "internal/indexing/qdrant.go": "bc6e727b651b3c883c3ffd8dfa1dedcb92d6f8688754d4d017219d1f77992a5e",
+              "internal/indexing/service.go": "9b6b0a184c1528326493c781a54d2cdacfa11f08f4880f2830cb11117305cfce",
+              "internal/observability/exporter.go": "0157801016b2b69b50ac1777dc8d0806c3ee9d60be97f8f926ab0d284ac5d10c",
+              "internal/observability/http.go": "bd452f5e0e35c0382c446a3449b96a71ba85fce7eaf1f60839f15a5694e50315",
+              "internal/observability/telemetry.go": "5ea55f5c7ee8c9191e35041d721678d5f7229bcf5e86154028fd524ab864e8a9",
+              "internal/store/citation_aliases.go": "d839d363d3939d3f59c0f4e2a6de6c6fed181964116a2afd3b906acd976fbd01",
+              "internal/store/conversation_tools.go": "db10f595dbfd5b7b5dd97494562c37b9279d3c52fd5473de8b6870cbeac0e343",
+              "internal/store/document_approvals.go": "c154af2433fe649ba57575d00d796cb77be7d29cb720e5c5c4e3436c4994ed13",
+              "internal/store/document_source.go": "beb8e6e6d239a93d95bf2868ec6fd96ce4fdee7c91d3778dff9732f99f38f32d",
+              "internal/store/document_updates.go": "a51c65ce424a8a63665014d021a8d137fb4f16d45360f5081d82adeb0f2a0ecb",
+              "internal/store/documents.go": "ce9369c847fb7c3d7ff78daaec4a04e94248347f9bbec8c75b981a21fd41bb83",
+              "internal/store/evidence.go": "cdfdc946b8b0873d76a5de02a3617acfe63f34b4087247e813c0c7062e1caade",
+              "internal/store/index_cleanup.go": "d20325c5e2c633119eb234f5fea9faf4cb2479a68c67f513f70a8dc8b1467dbb",
+              "internal/store/indexes.go": "e88180fd3920ae57bb8632c3776359bbcccdae1d7206df2045f82848b5656378",
+              "internal/store/knowledge_tools.go": "50a666d2d632fd8ad46a30d7fa3392a29fa921c6f7ab1407f1e3835b2be4004a",
+              "internal/store/memory.go": "f9a5e05c3065ad9c31e0eaa94a6466eabab15e448583f8fe85bd22a32d3f1c26",
+              "internal/store/migrations/001_initial.sql": "3d8b6e75d2bf57a430ea03890353ca8a28e70e5b8379e8222c0dba3476698551",
+              "internal/store/migrations/002_documents.sql": "fa6d1fb10c60fc129f47a700c819713b23af8961b7eaf3945033c8e6d6ee0d03",
+              "internal/store/migrations/003_indexes.sql": "cb1ea9e44f1c0f8e9d571dba53c8f683cb1458ecc537e513f57413e2434c3fdb",
+              "internal/store/migrations/004_document_objects.sql": "c2472ac17d8fb378d0598c917a4e084aa3d4fb2c3ff264f29fa6e98cd68c8339",
+              "internal/store/migrations/005_evidence.sql": "4e2fa93d721ab1634774bf5716654d0a4cea8e708dd22b285dc649b1e53af7a4",
+              "internal/store/migrations/006_tool_sources.sql": "4a617870eb46282fe44e3945aff8e41b164c1f64cca2a7bdd3f255b59964bd36",
+              "internal/store/migrations/007_run_prompts.sql": "7a034414b391d43a418af7430acba05aa4fd411ecca2b6542521e058da788236",
+              "internal/store/migrations/008_run_journals.sql": "620b4039f922cbff609420c678cf1e325ed3b21137a76145e39699a13a7aa843",
+              "internal/store/migrations/009_memories.sql": "8d11c43708b25fc5d2c5707177fe1c0cdaf1ac8d2b9c3e63a5b422839a3713d4",
+              "internal/store/migrations/010_document_approvals.sql": "7dfeea7b39f51d387dbb8f688768c91b45d8babeee9895ca8c6b83d66549ea37",
+              "internal/store/migrations/011_document_upload_limits.sql": "9df8f717e446905da8db3610260b5e7f06f941960d7b6e06cc620d9445e3640d",
+              "internal/store/objects.go": "42e40dd45a16eb850c6cebc6773e40f8ba610f238caac761ad07b85fd0613b8e",
+              "internal/store/prompts.go": "78196d87904760d8354629f16eec2922b74aa085f335cbf980070953693c9518",
+              "internal/store/run_journals.go": "41d25ddd8b5e494206362f9a33dc9e2bf1a54b98d7729436acfe4e76b9756007",
+              "internal/store/runs.go": "8b780459290cff2c07303936a30404af43eac96572d6c6ae810bfa9532bf2669",
+              "internal/store/sessions.go": "5aa14a64a4ba75e00b04b2a5cb1cac7d00d89067a2722c0a5e30f1171da60189",
+              "internal/store/store.go": "d343804b2c9cf9e7bae4f15371b864fa23471c683d1716e8a5bcfe5648b56ab2",
+              "internal/store/upload_limits.go": "8ad58b6cfe9316311443308703396727c67f2802b6d5151853747ba47cc3e475",
+              "internal/store/users.go": "f6593d9f07873e41670509a0322599e3870bb888e6abb2061706630795878eb6",
+              "internal/store/workspaces.go": "2d7ca881b8fc1099e19c507890b7ee00fce75783b50bd0dc883e22bcc24c08c7",
+              "internal/webui/webui.go": "4fea40332c9980fc0199b521457ed71cccdf35bf88fed1e28d8de415057f1283",
+              "observability/alerts.yml": "731329554c40cb590b04ccf94290d29c634631458e89d1c83a7582a1c06ea188",
+              "observability/prometheus.yml": "07cf685dcdf8605753b37396d8daa0cf2532ffc042aa2bc727a5b52073e2cf35",
+              "scripts/download-scifact.py": "ccd7d79cc216e3c28df8fcdf2d1a59cba243140388ecae810a7543679e9321d8",
+              "scripts/evaluation-stack.py": "d69d8822a87e49bf910d7d0c1e77ac65a25cac07543bc9453a7633521a050399",
+              "scripts/retrieval_eval/__init__.py": "e2ff5a1a77db12bfdbb86815ef4a43f4e36fe4674a15d44f8b0703e40dc007cf",
+              "scripts/retrieval_eval/__main__.py": "f3653a11615effe4c799d8ee7b8b26b8f0a9a1893cf8eda17e6dd8c08b0cb848",
+              "scripts/retrieval_eval/api.py": "d1b31fab14ae1ebbb6de269e3c2232f9179bace4d03829510ffc00bfbaa2d2c4",
+              "scripts/retrieval_eval/data.py": "1046575c00d6cdaf3fec1fe563da9b4064ca6c714b4b3845570066658916905e",
+              "scripts/retrieval_eval/metrics.py": "81f44acf3fedc188dd15b5e345120b3b60cc870883edbe31ea27eb1efff3e80a",
+              "scripts/retrieval_eval/runner.py": "de528e06638253a1d23d03574efb1730988dd0ea578d9fc04c96054db628e43c",
+              "scripts/run-scifact.py": "5bdcd88d39e0ace5290a90fc3de4d4ace2516e62857a8ddf9e1d1d31e522c9c3"
+            }
+          },
+          "schema": 1,
+          "source_sha256": "d21df85b93e3f3619ed50e5d964a3d2cb64225b25273b798f742d6ce3904a056"
+        }
+      },
+      "evaluator_source_sha256": "55e627e5b765e84a50043f24b974293002a43b377403981cadbfdbdc1974c05b",
+      "expected_execution": "qdrant_native",
+      "label": "qdrant",
+      "latency_note": "HTTP wall clock; cache/load/order are not controlled; no warmup excluded.",
+      "mapping_sha256": "6aa3df7c9ae44c3920809049f4073378d1ad79514baf9e40f5d1d1e6f4e1a9c8",
+      "modes": [
+        "lexical",
+        "vector",
+        "hybrid"
+      ],
+      "profile_id": "1bcc8c76d9e23aaccca40b0b35db50108914bef717aa1a6bda5eea92fa5a514a",
+      "python": "3.13.9",
+      "quality_protocol": "Full corpus, split qrels only, no test-guided parameter selection.",
+      "query_order": "dataset order, modes interleaved per query",
+      "query_policy": "fail",
+      "schema": 1,
+      "truncated_queries": 0,
+      "workspace_id": "45573e3d91dadb51dc082d719e0fcf71"
+    },
+    "candidate": {
+      "api_base": "http://127.0.0.1:55103/api/v1",
+      "chunk_limit": 50,
+      "corpus_verification": "indexes",
+      "dataset": {
+        "content_policy": "beir-title-text-cc-space-v1",
+        "control_normalization": {
+          "characters": 5,
+          "documents": 2
+        },
+        "counts": {
+          "corpus": 5183,
+          "evaluated_queries": 300,
+          "judgments": 339,
+          "queries_file": 1109
+        },
+        "input_sha256": {
+          "corpus": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+          "qrels": "0864bb985e0ca2367ba217977e72004d549054b2b06666ed9d4825ac7c21284c",
+          "queries": "8ff84a7c903f722981cd8d595c022660140c51867b27608a6d4910db86080313"
+        },
+        "normalized_content_sha256": "ebe0b484bf749151064933cd4267ba0833ced949d3f84715f05cc47a328c07cb",
+        "queries_over_512_bytes": 0,
+        "query_max_utf8_bytes": 204,
+        "split": "test"
+      },
+      "environment_freeze": {
+        "content_sha256": "ee173701ec5e08743b2130dee9c26043b836565233ddbabea585777116e81e4f",
+        "file_sha256": "57a0a7fab746f639ca379ed94de52facca98798821bb24e695603a61a9667b81",
+        "value": {
+          "measured_environment": {
+            "application_sha256": "74de0064d22ab12fef06181b42354d3f447bbff7d8710249f075230bfa3e32c5",
+            "config": {
+              "hnsw_config": {
+                "ef_construct": 100,
+                "full_scan_threshold": 10000,
+                "m": 16,
+                "max_indexing_threads": 0,
+                "on_disk": false
+              },
+              "optimizer_config": {
+                "default_segment_number": 0,
+                "deleted_threshold": 0.2,
+                "flush_interval_sec": 5,
+                "indexing_threshold": 10000,
+                "max_optimization_threads": null,
+                "max_segment_size": null,
+                "memmap_threshold": null,
+                "vacuum_min_vector_number": 1000
+              },
+              "params": {
+                "on_disk_payload": true,
+                "replication_factor": 1,
+                "shard_number": 1,
+                "sparse_vectors": {
+                  "bm25": {
+                    "modifier": "idf"
+                  }
+                },
+                "vectors": {
+                  "dense": {
+                    "datatype": "float32",
+                    "distance": "Cosine",
+                    "size": 1024
+                  }
+                },
+                "write_consistency_factor": 1
+              },
+              "quantization_config": null,
+              "wal_config": {
+                "wal_capacity_mb": 32,
+                "wal_retain_closed": 1,
+                "wal_segments_ahead": 0
+              }
+            },
+            "corpus_sha256": "dec31c8182f3d744c7d2c09423756fd1d17cbef75808db13ba01cc0aab4d1ac6",
+            "embedding_model": {
+              "digest": "7907646426070047a77226ac3e684fbbe8410524f7b4a74d02837e43f2146bab",
+              "name": "bge-m3:567m"
+            },
+            "engine": "qdrant_native",
+            "indexed_vectors_count": 25433,
+            "points_count": 12933,
+            "points_sha256": "d7699e490ffd88591ddb5eba9113cbf77e4397fdc0c9e47bd0eb89fd3c537109",
+            "profile_id": "1bcc8c76d9e23aaccca40b0b35db50108914bef717aa1a6bda5eea92fa5a514a",
+            "scope": "logical points/config and aggregate optimizer state; not a byte-identical HNSW snapshot",
+            "segments_count": 5,
+            "source_files": {
+              ".dockerignore": "fad0e1e1d5560111c29f36cfdb2016e1158254975d7fb945c91e9436b13e9593",
+              "Dockerfile": "08b8bc40178056c7324343e92e148f35b603fdb20acfcca29fceae41a4b91925",
+              "bridges/magent/bridge.py": "cb62ec93cf02ffb37efe7aea855586e4b95caf2ae7c72d4929257a092c18eafd",
+              "bridges/magent/citations.py": "7ac09b68cfca93552266cde19f129357e78088532c45538c5fc42bf76eda75a1",
+              "bridges/magent/document_writes.py": "a33207083bda5b745f8e3fc167cd385176687e7952c4b0086c175907e20998ef",
+              "bridges/magent/memory.py": "4b60a97bc7cd2aeb73219ea8fa8f2d1805185f3605f9bfdcaee15f38dcda352a",
+              "bridges/magent/model_context.py": "5a231379adebdab21285a9e92743f9d132ca4025f69e06bc4caee61f8b6b51c4",
+              "bridges/magent/persistence.py": "76c258e82ad677bfbf2967ec77257701669616f272f3bce50b91ff37129896f0",
+              "bridges/magent/prompts.py": "9a2307c1a062329ce0e2dd88ceec73fb26c2b0c24b166482d1fffecf7aed63cf",
+              "bridges/magent/requirements.txt": "f6b2b03ee6ec3a82c838eebee97b19819bd4995ceb946518dc0fb64868ad8765",
+              "bridges/magent/retrieval.py": "acb448d8cf21099c42e403e1d960d3435fcf853ea76a378639fdedcf5639718a",
+              "bridges/magent/streaming.py": "d35d39c378c7e8f4775584ba1ce4a6aeab283975cb75743c7fc4f76b956c873b",
+              "bridges/magent/workspace_tools.py": "18aabe63246dd64930a8d2ac2999f0ab448a0f43c1a5ca6948d99a90136b8ae6",
+              "cmd/server/agent_context.go": "47c37fc82bf4dd95d1cf366726a387f3df2149e5d136524fe643fc8ba08841cd",
+              "cmd/server/indexing.go": "eecd0029cb90a7ddf6739ae1f690a4804b1bc00d40ae88fcfe1dae92b9c0ba24",
+              "cmd/server/main.go": "ef3e389dc97433f69c4df2f800fa6a45e269f9602e9cfae54635cdf522f921d5",
+              "cmd/server/observability.go": "5f8e657b91bad6b1f6c9d39d26a30f7645cf94f70ee7a148075641227ed24275",
+              "cmd/server/upload_limits.go": "c93d57020853d16ed9ae093c114e222f831f8c43262ff1e7fac5ee2665886ea6",
+              "compose.observability.yaml": "827fe7b73381eb26f0eaa3212f2f4163e0adc71f20c41e30847c5f57e4aae509",
+              "compose.yaml": "039e0816590f61ab349d0f3e21aaeeff4705c9fdfe25dfb2dabe0bf2510bbdd7",
+              "docker/minio/Dockerfile": "b2f105c4d4f5aa23902a591472ffb6614f08e67f22e0e14880f35617e29f96e3",
+              "docker/tika/Dockerfile": "7965eeb08698288a178d081fa4050fc1846b59737748b3272f158c196f387529",
+              "docker/tika/tika-config.xml": "448c72734b1c76ca9b353dbda210d01f3f7cf5f98c3595ce2b8df9e2d87c9729",
+              "go.mod": "59ccffc0f0421300f69dea5c2e79ebcfbe4b80de238972d342405db23ad3678a",
+              "go.sum": "9cbd6f07f7667c42111a1c973e1da09adc2a24e6b7f0640ba631b8caa5e9d2ca",
+              "internal/agent/context.go": "bc7a2a8b7cde7827ebae80aa692c040da6e27c2adf1975600e24ecc5562debd9",
+              "internal/agent/journal.go": "8ff5351e384c1787e36b7a68d06a46bd79569d0eeeadcda01d6bfe7a5d4a30bd",
+              "internal/agent/memory.go": "1e713bc5a7c4f0a02664826de14da940ee5676efd15c77f19227e1905a63bf85",
+              "internal/agent/process.go": "15726b292e1b6b2973ba34542d270bb8636680fc82a73413810af13dc0ee6e5b",
+              "internal/agent/prompts.go": "bdedd68bead532d69fe80360e6280aa3fb689395e222f7ccc7ceb0c39cb71c37",
+              "internal/agent/stream.go": "79fbb8dbd6ace7e6c4d31a87c4c61face6434affcade504ea8f298d145d249bd",
+              "internal/agent/tools.go": "55928ca12a70ad57e27da83fa40d2a778e0a9321b1eaa0dc05e3524a64144053",
+              "internal/auth/credentials.go": "3db70db3e7434b70d3a72fd0adfc575a50ee0c5b0bb2546ed2b2bb2517171c19",
+              "internal/blob/storage.go": "16cd385d43cabb7aae64ea00c9a0244e5c58f439891e987074ee3a95011ec559",
+              "internal/domain/conversations.go": "1d2563d417cf7c3dda51bb54ed5e81a10fdff076c3d9abe7c151479765d1b418",
+              "internal/domain/document_approvals.go": "1e4309cc611bc03e48c1163f8ddb295a7df84422775d686b5397aa832a5391c8",
+              "internal/domain/documents.go": "0c1d01595ce99e00df13fcb15800ef04397c4ca067f5591c804f908a92ed82f0",
+              "internal/domain/evidence.go": "07385fc9fd8ea72982976c5d74fe8612313f179649205b53a26c161cf365adce",
+              "internal/domain/indexes.go": "1f2ce0a04ce88bd94742bef323e76d46c4ac77fa2aa7492f7abaeeb5f59ea7e2",
+              "internal/domain/memory.go": "10730f08ae57474ed4d2ed9575c200754d0417cd03645bb91dac961b97778c1d",
+              "internal/domain/models.go": "1b596143533e82e1b426a719f31bfede4e61a50965e6babed1498fb7e0e14c66",
+              "internal/domain/prompts.go": "ecb01ef5837d1e2f2707702c1f21dd7a64e7ba5020bd083b327fc8a4f3e56c8e",
+              "internal/domain/run_journals.go": "fceb78e3f8a767725d06223c553f3b7030c0e95ea93282e94295180e4c0d0e15",
+              "internal/httpapi/auth.go": "ab42846e70de7e3c076275de5599d040039d3af2e838ff81606adb6e4ed6a741",
+              "internal/httpapi/browser_auth.go": "85a476696746b419b4e16fbfa71cda3ba62959067e9afc4028375912fb3ec968",
+              "internal/httpapi/document_updates.go": "5cb83c4a360c35ae1c6a6d8b0be77cf52d806da2871b8678c756adcecea89666",
+              "internal/httpapi/documents.go": "e8dfbc81c2cd081859befdbecaea6b7ff53119914d9b2e1d3946daef7dec0f84",
+              "internal/httpapi/evidence.go": "1a69387d4a79e2ef82402a336e2cd2eb533ee3af7d86903de00f662ade77af9c",
+              "internal/httpapi/indexes.go": "fbec48473adc3e9be116ddd6b921c9ed2e90af3d4b17143905145e1ba87c3f7d",
+              "internal/httpapi/knowledge_tools.go": "3bb3628c6737c25deb3e44fb332b29f31f4ebca4788263a4580d5f8e384d6202",
+              "internal/httpapi/memory.go": "8df613be30236af4c49dc9b63756bab0b05eb377aeba1f300236cc50c82790ca",
+              "internal/httpapi/observed_agent.go": "f23d97836da3eda0eca04e918a70af4bb866d07745a843d4725dd4025fd6b268",
+              "internal/httpapi/prompts.go": "cda752ef074071345d94fa905469975f382ae06ac3c29a28fc7545806af08e49",
+              "internal/httpapi/recovery.go": "2c89eef530e9c95964dcb31f8f2ae07926bb2eab087a637ce8aa02b9f40a02f3",
+              "internal/httpapi/server.go": "d27bb45863d6b9b3108fc5015d0f87c2c7f0bd4d696fd32d5b4bcaf077810010",
+              "internal/httpapi/sessions.go": "f7bbbc908b2c13685b0060006fdac913d4b9e22088ca586fbe62cfac89826bd5",
+              "internal/httpapi/sse.go": "9265b304d3d5f459a07dc76b7e776432a5fe6dababa7e3e784bf3374458264ce",
+              "internal/httpapi/workspaces.go": "ee196a034814ea15c3e4c5e0847e92256bf2fa21f37144dba0236e7c431bc4cb",
+              "internal/indexing/chunker.go": "ddb5a6af2a692485a3e7d74727e5611d91659fa5110cf5b1783f763c2999ec08",
+              "internal/indexing/clients.go": "d54d03ad7a7a96f68f6798b80ae97763c794729a9255a96d889facbdc1eebdf6",
+              "internal/indexing/errors.go": "70396721a62d01380082907ecf4c76709933f0a8d7ccd972691a7e491541cf8a",
+              "internal/indexing/manifest.go": "d0277111db3a7b5f9e3551d8827239ea0baa929847a979d48b12f63d354f557a",
+              "internal/indexing/parser.go": "fa73c6f97777879884b473ebd782a9d0e4cbc1119c7cb642c772613f41ab3bec",
+              "internal/indexing/qdrant.go": "bc6e727b651b3c883c3ffd8dfa1dedcb92d6f8688754d4d017219d1f77992a5e",
+              "internal/indexing/service.go": "9b6b0a184c1528326493c781a54d2cdacfa11f08f4880f2830cb11117305cfce",
+              "internal/observability/exporter.go": "0157801016b2b69b50ac1777dc8d0806c3ee9d60be97f8f926ab0d284ac5d10c",
+              "internal/observability/http.go": "bd452f5e0e35c0382c446a3449b96a71ba85fce7eaf1f60839f15a5694e50315",
+              "internal/observability/telemetry.go": "5ea55f5c7ee8c9191e35041d721678d5f7229bcf5e86154028fd524ab864e8a9",
+              "internal/store/citation_aliases.go": "d839d363d3939d3f59c0f4e2a6de6c6fed181964116a2afd3b906acd976fbd01",
+              "internal/store/conversation_tools.go": "db10f595dbfd5b7b5dd97494562c37b9279d3c52fd5473de8b6870cbeac0e343",
+              "internal/store/document_approvals.go": "c154af2433fe649ba57575d00d796cb77be7d29cb720e5c5c4e3436c4994ed13",
+              "internal/store/document_source.go": "beb8e6e6d239a93d95bf2868ec6fd96ce4fdee7c91d3778dff9732f99f38f32d",
+              "internal/store/document_updates.go": "a51c65ce424a8a63665014d021a8d137fb4f16d45360f5081d82adeb0f2a0ecb",
+              "internal/store/documents.go": "ce9369c847fb7c3d7ff78daaec4a04e94248347f9bbec8c75b981a21fd41bb83",
+              "internal/store/evidence.go": "cdfdc946b8b0873d76a5de02a3617acfe63f34b4087247e813c0c7062e1caade",
+              "internal/store/index_cleanup.go": "d20325c5e2c633119eb234f5fea9faf4cb2479a68c67f513f70a8dc8b1467dbb",
+              "internal/store/indexes.go": "e88180fd3920ae57bb8632c3776359bbcccdae1d7206df2045f82848b5656378",
+              "internal/store/knowledge_tools.go": "50a666d2d632fd8ad46a30d7fa3392a29fa921c6f7ab1407f1e3835b2be4004a",
+              "internal/store/memory.go": "f9a5e05c3065ad9c31e0eaa94a6466eabab15e448583f8fe85bd22a32d3f1c26",
+              "internal/store/migrations/001_initial.sql": "3d8b6e75d2bf57a430ea03890353ca8a28e70e5b8379e8222c0dba3476698551",
+              "internal/store/migrations/002_documents.sql": "fa6d1fb10c60fc129f47a700c819713b23af8961b7eaf3945033c8e6d6ee0d03",
+              "internal/store/migrations/003_indexes.sql": "cb1ea9e44f1c0f8e9d571dba53c8f683cb1458ecc537e513f57413e2434c3fdb",
+              "internal/store/migrations/004_document_objects.sql": "c2472ac17d8fb378d0598c917a4e084aa3d4fb2c3ff264f29fa6e98cd68c8339",
+              "internal/store/migrations/005_evidence.sql": "4e2fa93d721ab1634774bf5716654d0a4cea8e708dd22b285dc649b1e53af7a4",
+              "internal/store/migrations/006_tool_sources.sql": "4a617870eb46282fe44e3945aff8e41b164c1f64cca2a7bdd3f255b59964bd36",
+              "internal/store/migrations/007_run_prompts.sql": "7a034414b391d43a418af7430acba05aa4fd411ecca2b6542521e058da788236",
+              "internal/store/migrations/008_run_journals.sql": "620b4039f922cbff609420c678cf1e325ed3b21137a76145e39699a13a7aa843",
+              "internal/store/migrations/009_memories.sql": "8d11c43708b25fc5d2c5707177fe1c0cdaf1ac8d2b9c3e63a5b422839a3713d4",
+              "internal/store/migrations/010_document_approvals.sql": "7dfeea7b39f51d387dbb8f688768c91b45d8babeee9895ca8c6b83d66549ea37",
+              "internal/store/migrations/011_document_upload_limits.sql": "9df8f717e446905da8db3610260b5e7f06f941960d7b6e06cc620d9445e3640d",
+              "internal/store/objects.go": "42e40dd45a16eb850c6cebc6773e40f8ba610f238caac761ad07b85fd0613b8e",
+              "internal/store/prompts.go": "78196d87904760d8354629f16eec2922b74aa085f335cbf980070953693c9518",
+              "internal/store/run_journals.go": "41d25ddd8b5e494206362f9a33dc9e2bf1a54b98d7729436acfe4e76b9756007",
+              "internal/store/runs.go": "8b780459290cff2c07303936a30404af43eac96572d6c6ae810bfa9532bf2669",
+              "internal/store/sessions.go": "5aa14a64a4ba75e00b04b2a5cb1cac7d00d89067a2722c0a5e30f1171da60189",
+              "internal/store/store.go": "d343804b2c9cf9e7bae4f15371b864fa23471c683d1716e8a5bcfe5648b56ab2",
+              "internal/store/upload_limits.go": "8ad58b6cfe9316311443308703396727c67f2802b6d5151853747ba47cc3e475",
+              "internal/store/users.go": "f6593d9f07873e41670509a0322599e3870bb888e6abb2061706630795878eb6",
+              "internal/store/workspaces.go": "2d7ca881b8fc1099e19c507890b7ee00fce75783b50bd0dc883e22bcc24c08c7",
+              "internal/webui/webui.go": "4fea40332c9980fc0199b521457ed71cccdf35bf88fed1e28d8de415057f1283",
+              "observability/alerts.yml": "731329554c40cb590b04ccf94290d29c634631458e89d1c83a7582a1c06ea188",
+              "observability/prometheus.yml": "07cf685dcdf8605753b37396d8daa0cf2532ffc042aa2bc727a5b52073e2cf35",
+              "scripts/download-scifact.py": "ccd7d79cc216e3c28df8fcdf2d1a59cba243140388ecae810a7543679e9321d8",
+              "scripts/evaluation-stack.py": "d69d8822a87e49bf910d7d0c1e77ac65a25cac07543bc9453a7633521a050399",
+              "scripts/retrieval_eval/__init__.py": "e2ff5a1a77db12bfdbb86815ef4a43f4e36fe4674a15d44f8b0703e40dc007cf",
+              "scripts/retrieval_eval/__main__.py": "f3653a11615effe4c799d8ee7b8b26b8f0a9a1893cf8eda17e6dd8c08b0cb848",
+              "scripts/retrieval_eval/api.py": "d1b31fab14ae1ebbb6de269e3c2232f9179bace4d03829510ffc00bfbaa2d2c4",
+              "scripts/retrieval_eval/data.py": "1046575c00d6cdaf3fec1fe563da9b4064ca6c714b4b3845570066658916905e",
+              "scripts/retrieval_eval/metrics.py": "81f44acf3fedc188dd15b5e345120b3b60cc870883edbe31ea27eb1efff3e80a",
+              "scripts/retrieval_eval/runner.py": "de528e06638253a1d23d03574efb1730988dd0ea578d9fc04c96054db628e43c",
+              "scripts/run-scifact.py": "5bdcd88d39e0ace5290a90fc3de4d4ace2516e62857a8ddf9e1d1d31e522c9c3"
+            }
+          },
+          "schema": 1,
+          "source_sha256": "d21df85b93e3f3619ed50e5d964a3d2cb64225b25273b798f742d6ce3904a056"
+        }
+      },
+      "evaluator_source_sha256": "55e627e5b765e84a50043f24b974293002a43b377403981cadbfdbdc1974c05b",
+      "expected_execution": "qdrant_native",
+      "label": "qdrant",
+      "latency_note": "HTTP wall clock; cache/load/order are not controlled; no warmup excluded.",
+      "mapping_sha256": "6aa3df7c9ae44c3920809049f4073378d1ad79514baf9e40f5d1d1e6f4e1a9c8",
+      "modes": [
+        "lexical",
+        "vector",
+        "hybrid"
+      ],
+      "profile_id": "1bcc8c76d9e23aaccca40b0b35db50108914bef717aa1a6bda5eea92fa5a514a",
+      "python": "3.13.9",
+      "quality_protocol": "Full corpus, split qrels only, no test-guided parameter selection.",
+      "query_order": "dataset order, modes interleaved per query",
+      "query_policy": "fail",
+      "schema": 1,
+      "truncated_queries": 0,
+      "workspace_id": "45573e3d91dadb51dc082d719e0fcf71"
+    }
+  },
+  "queries": 300,
+  "ranking_parity": false,
+  "ranking_sha256": {
+    "baseline": "1bbd6c8244d2d5a7f8023548f50c737a660ccc2ae75beff47b22d982f8e151ca",
+    "candidate": "78274f894386d76ca9bbe7f10d90ca1ef52560522bf78fa997296a540cc3547a"
+  },
+  "seed": 42
+}

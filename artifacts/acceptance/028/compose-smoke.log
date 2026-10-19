@@ -1,0 +1,500 @@
+ Image magworkspace-minio:local Building 
+ Image mw-index-test-d3117ec3d8-tika Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.10kB done
+#1 DONE 0.0s
+
+#2 [minio internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.97kB done
+#2 DONE 0.0s
+
+#3 [tika internal] load build definition from Dockerfile
+#3 transferring dockerfile: 948B done
+#3 DONE 0.0s
+
+#4 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#4 DONE 0.0s
+
+#5 [tika internal] load .dockerignore
+#5 transferring context: 2B done
+#5 DONE 0.0s
+
+#6 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#6 DONE 0.0s
+
+#7 [tika internal] load build context
+#7 transferring context: 37B done
+#7 DONE 0.0s
+
+#8 [tika 2/4] WORKDIR /opt/tika
+#8 CACHED
+
+#9 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#9 CACHED
+
+#10 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#10 CACHED
+
+#11 [tika] exporting to image
+#11 exporting layers done
+#11 writing image sha256:551687f86944bce7e8a12b332a58a1d324be2acc7ffa29f0b9505b83d62f9a54 done
+#11 naming to docker.io/library/mw-index-test-d3117ec3d8-tika 0.0s done
+#11 DONE 0.0s
+
+#12 [tika] resolving provenance for metadata file
+#12 DONE 0.0s
+
+#13 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#13 ...
+
+#14 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#14 DONE 4.1s
+
+#13 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#13 DONE 4.5s
+
+#15 [minio internal] load .dockerignore
+#15 transferring context: 2B done
+#15 DONE 0.0s
+
+#16 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#16 DONE 0.0s
+
+#17 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#17 DONE 0.0s
+
+#18 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#18 CACHED
+
+#19 [minio build 3/6] WORKDIR /src
+#19 CACHED
+
+#20 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#20 CACHED
+
+#21 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#21 CACHED
+
+#22 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#22 CACHED
+
+#23 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#23 CACHED
+
+#24 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#24 CACHED
+
+#25 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#25 CACHED
+
+#26 [minio stage-1 5/5] WORKDIR /data
+#26 CACHED
+
+#27 [minio] exporting to image
+#27 exporting layers done
+#27 writing image sha256:f374d96a230e7d8016f38afe41e5638b057b661d03226ef19e207bdb9b9fdd65 0.0s done
+#27 naming to docker.io/library/magworkspace-minio:local 0.0s done
+#27 DONE 0.1s
+
+#28 [minio] resolving provenance for metadata file
+#28 DONE 0.0s
+ Image magworkspace-minio:local Built 
+ Image mw-index-test-d3117ec3d8-tika Built 
+ Volume mw-index-test-d3117ec3d8_minio-data Creating 
+ Network mw-index-test-d3117ec3d8_default Creating 
+ Volume mw-index-test-d3117ec3d8_qdrant-data Creating 
+ Volume mw-index-test-d3117ec3d8_mysql-data Creating 
+ Volume mw-index-test-d3117ec3d8_qdrant-data Creating 
+ Network mw-index-test-d3117ec3d8_default Creating 
+ Volume mw-index-test-d3117ec3d8_minio-data Creating 
+ Volume mw-index-test-d3117ec3d8_mysql-data Creating 
+ Volume mw-index-test-d3117ec3d8_qdrant-data Created 
+ Volume mw-index-test-d3117ec3d8_qdrant-data Created 
+ Volume mw-index-test-d3117ec3d8_minio-data Created 
+ Volume mw-index-test-d3117ec3d8_minio-data Created 
+ Volume mw-index-test-d3117ec3d8_mysql-data Created 
+ Volume mw-index-test-d3117ec3d8_mysql-data Created 
+ Network mw-index-test-d3117ec3d8_default Created 
+ Network mw-index-test-d3117ec3d8_default Created 
+ Container mw-index-test-d3117ec3d8-tika-1 Creating 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Creating 
+ Container mw-index-test-d3117ec3d8-mysql-1 Creating 
+ Container mw-index-test-d3117ec3d8-ollama-1 Creating 
+ Container mw-index-test-d3117ec3d8-minio-1 Creating 
+ Container mw-index-test-d3117ec3d8-mysql-1 Created 
+ Container mw-index-test-d3117ec3d8-ollama-1 Created 
+ Container mw-index-test-d3117ec3d8-tika-1 Created 
+ Container mw-index-test-d3117ec3d8-minio-1 Created 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Created 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Starting 
+ Container mw-index-test-d3117ec3d8-mysql-1 Starting 
+ Container mw-index-test-d3117ec3d8-tika-1 Starting 
+ Container mw-index-test-d3117ec3d8-minio-1 Starting 
+ Container mw-index-test-d3117ec3d8-ollama-1 Starting 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Started 
+ Container mw-index-test-d3117ec3d8-mysql-1 Started 
+ Container mw-index-test-d3117ec3d8-tika-1 Started 
+ Container mw-index-test-d3117ec3d8-minio-1 Started 
+ Container mw-index-test-d3117ec3d8-ollama-1 Started 
+ Container mw-index-test-d3117ec3d8-tika-1 Waiting 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Waiting 
+ Container mw-index-test-d3117ec3d8-minio-1 Waiting 
+ Container mw-index-test-d3117ec3d8-mysql-1 Waiting 
+ Container mw-index-test-d3117ec3d8-ollama-1 Waiting 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Healthy 
+ Container mw-index-test-d3117ec3d8-minio-1 Healthy 
+ Container mw-index-test-d3117ec3d8-ollama-1 Healthy 
+ Container mw-index-test-d3117ec3d8-tika-1 Healthy 
+ Container mw-index-test-d3117ec3d8-mysql-1 Healthy 
+ Container mw-index-test-d3117ec3d8-ollama-1 Running 
+ Container mw-index-test-d3117ec3d8-ollama-1 Waiting 
+ Container mw-index-test-d3117ec3d8-ollama-1 Healthy 
+ Container mw-index-test-d3117ec3d8-ollama-model-run-b2c4273398c4 Creating 
+ Container mw-index-test-d3117ec3d8-ollama-model-run-b2c4273398c4 Created 
+ Image mw-index-test-d3117ec3d8-harness Building 
+ Image mw-index-test-d3117ec3d8-backend Building 
+ Image magworkspace-minio:local Building 
+ Image mw-index-test-d3117ec3d8-tika Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 2.20kB done
+#1 DONE 0.0s
+
+#2 [harness internal] load build definition from Dockerfile
+#2 transferring dockerfile: 503B 0.0s done
+#2 DONE 0.1s
+
+#3 [minio internal] load build definition from Dockerfile
+#3 transferring dockerfile: 1.97kB 0.0s done
+#3 DONE 0.1s
+
+#4 [backend internal] load build definition from Dockerfile
+#4 transferring dockerfile: 549B 0.0s done
+#4 DONE 0.1s
+
+#5 [tika internal] load build definition from Dockerfile
+#5 transferring dockerfile: 948B done
+#5 DONE 0.1s
+
+#6 [backend internal] load metadata for docker.io/library/golang:1.27-alpine
+#6 DONE 0.0s
+
+#7 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#7 DONE 0.0s
+
+#8 [backend internal] load metadata for docker.io/library/alpine:3.23
+#8 ...
+
+#9 [tika internal] load .dockerignore
+#9 transferring context: 2B done
+#9 DONE 0.0s
+
+#10 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#10 DONE 0.1s
+
+#11 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#11 DONE 0.0s
+
+#12 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#12 DONE 0.1s
+
+#13 [tika internal] load build context
+#13 transferring context: 37B done
+#13 DONE 0.1s
+
+#14 [minio internal] load .dockerignore
+#14 transferring context: 2B done
+#14 DONE 0.1s
+
+#15 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#15 CACHED
+
+#16 [tika 2/4] WORKDIR /opt/tika
+#16 CACHED
+
+#17 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#17 CACHED
+
+#18 [tika] exporting to image
+#18 exporting layers done
+#18 writing image sha256:551687f86944bce7e8a12b332a58a1d324be2acc7ffa29f0b9505b83d62f9a54
+#18 writing image sha256:551687f86944bce7e8a12b332a58a1d324be2acc7ffa29f0b9505b83d62f9a54 0.0s done
+#18 naming to docker.io/library/mw-index-test-d3117ec3d8-tika done
+#18 DONE 0.1s
+
+#19 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#19 DONE 0.0s
+
+#20 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#20 DONE 0.0s
+
+#21 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#21 CACHED
+
+#22 [minio build 3/6] WORKDIR /src
+#22 CACHED
+
+#23 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#23 CACHED
+
+#24 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#24 CACHED
+
+#25 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#25 CACHED
+
+#26 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#26 CACHED
+
+#27 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#27 CACHED
+
+#28 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#28 CACHED
+
+#29 [minio stage-1 5/5] WORKDIR /data
+#29 CACHED
+
+#30 [minio] exporting to image
+#30 exporting layers done
+#30 writing image sha256:f374d96a230e7d8016f38afe41e5638b057b661d03226ef19e207bdb9b9fdd65 0.1s done
+#30 naming to docker.io/library/magworkspace-minio:local
+#30 naming to docker.io/library/magworkspace-minio:local done
+#30 DONE 0.1s
+
+#31 [tika] resolving provenance for metadata file
+#31 DONE 0.1s
+
+#32 [minio] resolving provenance for metadata file
+#32 DONE 0.0s
+
+#33 [harness internal] load metadata for docker.io/library/python:3.13-alpine
+#33 DONE 4.3s
+
+#8 [backend internal] load metadata for docker.io/library/alpine:3.23
+#8 ...
+
+#34 [harness internal] load .dockerignore
+#34 transferring context: 85B done
+#34 DONE 0.0s
+
+#35 [harness 1/6] FROM docker.io/library/python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+#35 DONE 0.0s
+
+#36 [harness 2/6] RUN addgroup -S app && adduser -S -G app app
+#36 CACHED
+
+#37 [harness 3/6] WORKDIR /app
+#37 CACHED
+
+#38 [harness internal] load build context
+#38 transferring context: 44.66kB 0.0s done
+#38 DONE 0.0s
+
+#39 [harness 4/6] COPY bridges/magent/requirements.txt bridges/magent/service_requirements.txt /app/bridges/magent/
+#39 DONE 0.0s
+
+#40 [harness 5/6] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/service_requirements.txt
+#40 ...
+
+#8 [backend internal] load metadata for docker.io/library/alpine:3.23
+#8 DONE 4.8s
+
+#41 [backend internal] load .dockerignore
+#41 transferring context: 2B done
+#41 DONE 0.0s
+
+#42 [backend build 1/8] FROM docker.io/library/golang:1.27-alpine
+#42 DONE 0.0s
+
+#43 [backend stage-1 1/4] FROM docker.io/library/alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0
+#43 resolve docker.io/library/alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 0.0s done
+#43 sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 9.22kB / 9.22kB done
+#43 sha256:ae959799024a09da597284763c417a6e820e020fad0634c5267cf4f125e682bf 1.02kB / 1.02kB done
+#43 sha256:189367d8c0703b7e99946d63d14f1ea3b62c9b8f31a686b1a22733a2436157a6 627B / 627B done
+#43 DONE 0.0s
+
+#44 [backend internal] load build context
+#44 transferring context: 212.74kB 0.1s done
+#44 DONE 0.1s
+
+#45 [backend stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app
+#45 ...
+
+#46 [backend build 4/8] COPY gomod-download /go/pkg/mod/cache/download
+#46 CACHED
+
+#47 [backend build 2/8] WORKDIR /src
+#47 CACHED
+
+#48 [backend build 3/8] COPY go.mod go.sum ./
+#48 CACHED
+
+#49 [backend build 5/8] RUN GOPROXY=file:///go/pkg/mod/cache/download go mod download
+#49 CACHED
+
+#50 [backend build 6/8] COPY cmd ./cmd
+#50 DONE 0.1s
+
+#51 [backend build 7/8] COPY internal ./internal
+#51 DONE 0.0s
+
+#52 [backend build 8/8] RUN CGO_ENABLED=0 go build -trimpath -o /out/magworkspace ./cmd/server
+#52 ...
+
+#45 [backend stage-1 2/4] RUN apk add --no-cache ca-certificates && addgroup -S app && adduser -S -G app app
+#45 5.574 (1/1) Installing ca-certificates (20260909-r0)
+#45 6.038 Executing busybox-1.37.0-r30.trigger
+#45 6.053 Executing ca-certificates-20260909-r0.trigger
+#45 6.113 OK: 8749 KiB in 17 packages
+#45 DONE 6.5s
+
+#40 [harness 5/6] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/service_requirements.txt
+#40 4.087 Collecting anyio==4.15.1 (from -r /app/bridges/magent/requirements.txt (line 3))
+#40 6.179   Downloading anyio-4.15.1-py3-none-any.whl (132 kB)
+#40 ...
+
+#53 [backend stage-1 3/4] WORKDIR /app
+#53 DONE 0.2s
+
+#52 [backend build 8/8] RUN CGO_ENABLED=0 go build -trimpath -o /out/magworkspace ./cmd/server
+#52 ...
+
+#40 [harness 5/6] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/service_requirements.txt
+#40 8.392 Collecting certifi==2026.7.22 (from -r /app/bridges/magent/requirements.txt (line 4))
+#40 8.665   Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+#40 10.33 Collecting h11==0.16.0 (from -r /app/bridges/magent/requirements.txt (line 5))
+#40 10.74   Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#40 11.49 Collecting httpcore==1.0.9 (from -r /app/bridges/magent/requirements.txt (line 6))
+#40 11.74   Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#40 12.90 Collecting httpx==0.28.1 (from -r /app/bridges/magent/requirements.txt (line 7))
+#40 13.18   Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#40 14.18 Collecting idna==3.20 (from -r /app/bridges/magent/requirements.txt (line 8))
+#40 14.48   Downloading idna-3.20-py3-none-any.whl (69 kB)
+#40 15.40 Collecting typing-extensions==4.16.0 (from -r /app/bridges/magent/requirements.txt (line 9))
+#40 15.62   Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#40 16.30 Collecting annotated-doc==0.0.5 (from -r /app/bridges/magent/service_requirements.txt (line 5))
+#40 16.55   Downloading annotated_doc-0.0.5-py3-none-any.whl (5.3 kB)
+#40 16.89 Collecting annotated-types==0.8.0 (from -r /app/bridges/magent/service_requirements.txt (line 6))
+#40 17.29   Downloading annotated_types-0.8.0-py3-none-any.whl (13 kB)
+#40 17.83 Collecting click==8.5.0 (from -r /app/bridges/magent/service_requirements.txt (line 7))
+#40 18.06   Downloading click-8.5.0-py3-none-any.whl (125 kB)
+#40 20.64 Collecting fastapi==0.143.3 (from -r /app/bridges/magent/service_requirements.txt (line 8))
+#40 20.86   Downloading fastapi-0.143.3-py3-none-any.whl (144 kB)
+#40 22.21 Collecting opentelemetry-api==1.45.1 (from -r /app/bridges/magent/service_requirements.txt (line 9))
+#40 22.40   Downloading opentelemetry_api-1.45.1-py3-none-any.whl (60 kB)
+#40 ...
+
+#52 [backend build 8/8] RUN CGO_ENABLED=0 go build -trimpath -o /out/magworkspace ./cmd/server
+#52 DONE 22.4s
+
+#54 [backend stage-1 4/4] COPY --from=build /out/magworkspace /app/magworkspace
+#54 DONE 0.1s
+
+#40 [harness 5/6] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/service_requirements.txt
+#40 ...
+
+#55 [backend] exporting to image
+#55 exporting layers 0.1s done
+#55 writing image sha256:a4d310b321bdf8a6625bd0324e9c19fd300113d2004ae9cf5d098c4fb46d7595 done
+#55 naming to docker.io/library/mw-index-test-d3117ec3d8-backend done
+#55 DONE 0.1s
+
+#56 [backend] resolving provenance for metadata file
+#56 DONE 0.0s
+
+#40 [harness 5/6] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/service_requirements.txt
+#40 25.19 Collecting pydantic==2.14.1 (from -r /app/bridges/magent/service_requirements.txt (line 10))
+#40 25.63   Downloading pydantic-2.14.1-py3-none-any.whl (488 kB)
+#40 35.47 Collecting pydantic-core==2.50.1 (from -r /app/bridges/magent/service_requirements.txt (line 11))
+#40 35.69   Downloading pydantic_core-2.50.1-cp313-cp313-musllinux_1_1_aarch64.whl (2.3 MB)
+#40 41.19      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 472.3 kB/s  0:00:05
+#40 41.68 Collecting starlette==1.8.0 (from -r /app/bridges/magent/service_requirements.txt (line 30))
+#40 41.91   Downloading starlette-1.8.0-py3-none-any.whl (79 kB)
+#40 42.48 Collecting typing-inspection==0.4.4 (from -r /app/bridges/magent/service_requirements.txt (line 31))
+#40 43.45   Downloading typing_inspection-0.4.4-py3-none-any.whl (14 kB)
+#40 44.03 Collecting uvicorn==0.53.0 (from -r /app/bridges/magent/service_requirements.txt (line 32))
+#40 44.25   Downloading uvicorn-0.53.0-py3-none-any.whl (87 kB)
+#40 44.46 Installing collected packages: typing-extensions, idna, h11, click, certifi, annotated-types, annotated-doc, uvicorn, typing-inspection, pydantic-core, opentelemetry-api, httpcore, anyio, starlette, pydantic, httpx, fastapi
+#40 45.37 
+#40 45.37 Successfully installed annotated-doc-0.0.5 annotated-types-0.8.0 anyio-4.15.1 certifi-2026.7.22 click-8.5.0 fastapi-0.143.3 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.20 opentelemetry-api-1.45.1 pydantic-2.14.1 pydantic-core-2.50.1 starlette-1.8.0 typing-extensions-4.16.0 typing-inspection-0.4.4 uvicorn-0.53.0
+#40 45.37 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#40 DONE 45.5s
+
+#57 [harness 6/6] COPY bridges /app/bridges
+#57 DONE 0.0s
+
+#58 [harness] exporting to image
+#58 exporting layers
+#58 exporting layers 0.2s done
+#58 writing image sha256:27ef4736b90ef06810b620a4819271da1145b212efe08bd9ccdad484073d4f4d done
+#58 naming to docker.io/library/mw-index-test-d3117ec3d8-harness done
+#58 DONE 0.2s
+
+#59 [harness] resolving provenance for metadata file
+#59 DONE 0.0s
+ Image mw-index-test-d3117ec3d8-tika Built 
+ Image mw-index-test-d3117ec3d8-harness Built 
+ Image magworkspace-minio:local Built 
+ Image mw-index-test-d3117ec3d8-backend Built 
+ Container mw-index-test-d3117ec3d8-minio-1 Running 
+ Container mw-index-test-d3117ec3d8-ollama-1 Running 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Running 
+ Container mw-index-test-d3117ec3d8-mysql-1 Running 
+ Container mw-index-test-d3117ec3d8-tika-1 Running 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Creating 
+ Container mw-index-test-d3117ec3d8-harness-1 Creating 
+ Volume mw-index-test-d3117ec3d8_redis-data Creating 
+ Volume mw-index-test-d3117ec3d8_redis-data Creating 
+ Volume mw-index-test-d3117ec3d8_redis-data Created 
+ Volume mw-index-test-d3117ec3d8_redis-data Created 
+ Container mw-index-test-d3117ec3d8-redis-1 Creating 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Created 
+ Container mw-index-test-d3117ec3d8-redis-1 Created 
+ Container mw-index-test-d3117ec3d8-harness-1 Created 
+ Container mw-index-test-d3117ec3d8-backend-1 Creating 
+ Container mw-index-test-d3117ec3d8-backend-1 Created 
+ Container mw-index-test-d3117ec3d8-redis-1 Starting 
+ Container mw-index-test-d3117ec3d8-harness-1 Starting 
+ Container mw-index-test-d3117ec3d8-ollama-1 Waiting 
+ Container mw-index-test-d3117ec3d8-redis-1 Started 
+ Container mw-index-test-d3117ec3d8-harness-1 Started 
+ Container mw-index-test-d3117ec3d8-ollama-1 Healthy 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Starting 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Started 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Waiting 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Waiting 
+ Container mw-index-test-d3117ec3d8-minio-1 Waiting 
+ Container mw-index-test-d3117ec3d8-tika-1 Waiting 
+ Container mw-index-test-d3117ec3d8-harness-1 Waiting 
+ Container mw-index-test-d3117ec3d8-redis-1 Waiting 
+ Container mw-index-test-d3117ec3d8-mysql-1 Waiting 
+ Container mw-index-test-d3117ec3d8-qdrant-1 Healthy 
+ Container mw-index-test-d3117ec3d8-ollama-model-1 Exited 
+ Container mw-index-test-d3117ec3d8-minio-1 Healthy 
+ Container mw-index-test-d3117ec3d8-mysql-1 Healthy 
+ Container mw-index-test-d3117ec3d8-tika-1 Healthy 
+ Container mw-index-test-d3117ec3d8-redis-1 Healthy 
+ Container mw-index-test-d3117ec3d8-harness-1 Healthy 
+ Container mw-index-test-d3117ec3d8-backend-1 Starting 
+ Container mw-index-test-d3117ec3d8-backend-1 Started 
+=== RUN   TestMinIOLive
+--- PASS: TestMinIOLive (0.03s)
+PASS
+ok  	magworkspace/internal/blob	2.234s
+=== RUN   TestQdrantLiveNativeChineseBM25RRFAndMutations
+    qdrant_test.go:343: real Qdrant: multilingual BM25, native RRF, scopes, idempotent upsert, TF/IDF update and deletion passed
+--- PASS: TestQdrantLiveNativeChineseBM25RRFAndMutations (0.30s)
+=== RUN   TestParserRealTika
+=== RUN   TestParserRealTika/fixture.pdf
+=== RUN   TestParserRealTika/fixture.docx
+=== RUN   TestParserRealTika/attachment.pdf
+=== RUN   TestParserRealTika/reject_oversized_extraction
+--- PASS: TestParserRealTika (0.71s)
+    --- PASS: TestParserRealTika/fixture.pdf (0.30s)
+    --- PASS: TestParserRealTika/fixture.docx (0.30s)
+    --- PASS: TestParserRealTika/attachment.pdf (0.05s)
+    --- PASS: TestParserRealTika/reject_oversized_extraction (0.06s)
+PASS
+ok  	magworkspace/internal/indexing	2.781s
+PASS: original bytes, async ready, Chinese lexical/vector/hybrid, rename without reindex, inline-edit CAS, immutable citation, current-version filtering, soft-delete visibility
+PASS: real Go/Harness demo, two consecutive SSE turns, Redis cursors, exact replay, durable results, no duplicate messages

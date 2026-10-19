@@ -1,0 +1,70 @@
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/cmd/server	1.624s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/agent	1.425s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/auth	1.337s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/blob	1.426s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/domain	1.378s [no tests to run]
+=== RUN   TestHTTPRedisIndexDispatchProgressRecovery
+2026/10/18 10:01:52 INFO http request request_id=f2367bd371dbe30a23f94d5dcec20488 method=POST route=/api/v1/auth/register status=201 duration_seconds=1.301640875 response_bytes=553 outcome=success
+2026/10/18 10:01:53 INFO http request request_id=5b12a0e0cdfc43a586ba38afb39b51b4 method=POST route=/api/v1/auth/register status=201 duration_seconds=1.302394833 response_bytes=562 outcome=success
+2026/10/18 10:01:53 INFO http request request_id=44effd259f6412aba03c2173a766838f method=POST route=/api/v1/workspaces/{workspaceID}/documents status=201 duration_seconds=0.020505042 response_bytes=706 outcome=success
+2026/10/18 10:01:53 INFO http request request_id=1293000a06aa58b2b4efbe39fb4a231a method=GET route=/api/v1/workspaces/{workspaceID}/documents/{documentID}/versions/{versionID}/index status=200 duration_seconds=0.007556125 response_bytes=691 outcome=success
+2026/10/18 10:01:53 INFO http request request_id=30b97391ed6f8253e72c2057e1aeef25 method=GET route=/api/v1/workspaces/{workspaceID}/documents/{documentID}/versions/{versionID}/index status=404 duration_seconds=0.004442 response_bytes=78 outcome=success
+2026/10/18 10:01:53 INFO document index finished outcome=success duration_ms=34
+2026/10/18 10:01:53 INFO http request request_id=7c3778d898fee37f52b25983163d87b2 method=GET route=/api/v1/workspaces/{workspaceID}/documents/{documentID}/versions/{versionID}/index status=200 duration_seconds=0.00618725 response_bytes=648 outcome=success
+2026/10/18 10:01:53 INFO http request request_id=67a54c79e6a3e1027f34933c5fe49341 method=POST route=/api/v1/workspaces/{workspaceID}/documents status=201 duration_seconds=0.017937375 response_bytes=706 outcome=success
+2026/10/18 10:01:53 INFO document index finished outcome=success duration_ms=17
+2026/10/18 10:01:53 INFO http request request_id=f14e182a1ef5ca26dcdb04d78e65ef14 method=GET route=/api/v1/workspaces/{workspaceID}/documents/{documentID}/versions/{versionID}/index status=200 duration_seconds=0.006079583 response_bytes=648 outcome=success
+--- PASS: TestHTTPRedisIndexDispatchProgressRecovery (3.04s)
+=== RUN   TestHTTPRedisSSEReplayPrivateGenerationAndSources
+2026/10/18 10:01:55 INFO http request request_id=5bfff14f22d9721eadcd9e7b5882b174 method=POST route=/api/v1/auth/register status=201 duration_seconds=1.367119541 response_bytes=556 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=705de922fe6e23360c64cb199d4b50e1 method=POST route=/api/v1/auth/register status=201 duration_seconds=1.290565666 response_bytes=574 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=502d4a069864c5b0a70d606943249dc4 method=POST route=/api/v1/workspaces/{workspaceID}/documents status=201 duration_seconds=0.017187292 response_bytes=706 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=5c6a29af1d9ac6b4e6f7e3940e54fd3b method=POST route=/api/v1/workspaces/{workspaceID}/sessions status=201 duration_seconds=0.006262375 response_bytes=270 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=965c39a037ef28f5fc4a6a0a91673c9f method=POST route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/messages status=200 duration_seconds=0.082746541 response_bytes=1024 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=5d8f860ba72bd437a19452e9d6d3b01b method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=200 duration_seconds=0.027509667 response_bytes=738 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=72a2e766ef0a9d51437334f2b929bb3a method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=404 duration_seconds=0.003667375 response_bytes=78 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=77102683a1db387dffb34cc0d25401f8 method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=409 duration_seconds=0.014042417 response_bytes=109 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=279701bcb2cabff9fc0f6bb785ad80fa method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=409 duration_seconds=0.014171792 response_bytes=116 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=e378a5d0bf223a8d4333b8094785b90f method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=409 duration_seconds=0.014308541 response_bytes=109 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=6c9893524ef21bb0da27ac31e649d221 method=DELETE route=/api/v1/workspaces/{workspaceID}/documents/{documentID} status=204 duration_seconds=0.008188792 response_bytes=0 outcome=success
+2026/10/18 10:01:56 INFO http request request_id=10c68167ffb6dffe94a04a881372f910 method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=403 duration_seconds=0.01397125 response_bytes=87 outcome=success
+--- PASS: TestHTTPRedisSSEReplayPrivateGenerationAndSources (3.21s)
+=== RUN   TestHTTPRedisSSELiveSubscriptionOutage
+2026/10/18 10:01:58 INFO http request request_id=8fd0116c7bea68ecc1e9e328003fae69 method=POST route=/api/v1/auth/register status=201 duration_seconds=1.296859084 response_bytes=548 outcome=success
+2026/10/18 10:01:58 INFO http request request_id=4b56b0dc66ba9d80ba8e97b107ff2f2d method=POST route=/api/v1/workspaces/{workspaceID}/sessions status=201 duration_seconds=0.005461041 response_bytes=275 outcome=success
+2026/10/18 10:01:58 INFO http request request_id=44c89a45da8215b2231e99570561e2d8 method=POST route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/messages status=200 duration_seconds=0.085070833 response_bytes=1025 outcome=success
+2026/10/18 10:01:58 INFO http request request_id=7ec59f9803d99668218ba9f5833d4538 method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=503 duration_seconds=0.014609 response_bytes=113 outcome=error
+2026/10/18 10:01:58 INFO http request request_id=580725f80428bfd27860a0efca16d5f6 method=GET route=/api/v1/workspaces/{workspaceID}/sessions/{sessionID}/runs/{runID}/events status=200 duration_seconds=0.079200208 response_bytes=635 outcome=canceled
+--- PASS: TestHTTPRedisSSELiveSubscriptionOutage (1.68s)
+PASS
+ok  	magworkspace/internal/httpapi	9.597s
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/indexing	1.545s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/observability	1.311s [no tests to run]
+=== RUN   TestRedisQueueDedupAndLoss
+--- PASS: TestRedisQueueDedupAndLoss (0.01s)
+=== RUN   TestRedisEventsBoundedReplayAndDedup
+--- PASS: TestRedisEventsBoundedReplayAndDedup (1.90s)
+=== RUN   TestRedisProgressGenerationAndUnavailable
+--- PASS: TestRedisProgressGenerationAndUnavailable (0.00s)
+PASS
+ok  	magworkspace/internal/redisstate	3.158s
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/store	1.502s [no tests to run]
+testing: warning: no tests to run
+PASS
+ok  	magworkspace/internal/webui	1.228s [no tests to run]

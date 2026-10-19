@@ -1,0 +1,17 @@
+{
+  "8080": {
+    "status": 200,
+    "content_type": "text/html"
+  },
+  "5173": {
+    "status": 200,
+    "content_type": "text/html"
+  },
+  "readiness": {
+    "data": {
+      "redis": "ready",
+      "status": "ready"
+    },
+    "success": true
+  }
+}

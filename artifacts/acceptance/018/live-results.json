@@ -1,0 +1,90 @@
+{
+  "checks": [
+    "upload original bytes and ready index",
+    "lexical retrieves v1",
+    "vector retrieves v1",
+    "hybrid retrieves v1",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "real model retrieves random fact and amount",
+    "answer has verified citations",
+    "citation binds v1",
+    "fixed evidence readable",
+    "stream starts with Run identity",
+    "stream durable terminal run.suspended",
+    "model proposes native write approval",
+    "approval targets expected document",
+    "proposal changes only requested amount preserving exact other bytes",
+    "pending approval has no write side effect",
+    "pending approval reload persists",
+    "cross-user approval rejected 404",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "write committed receipt present",
+    "approval advances version head",
+    "new version exact proposed bytes",
+    "duplicate approval rejected without second version",
+    "stale human edit rejected",
+    "lexical only retrieves new head v2",
+    "vector only retrieves new head v2",
+    "hybrid only retrieves new head v2",
+    "immutable v1 unchanged",
+    "old citation remains bound to v1",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "fresh live answer cites v2 and new amount",
+    "stream starts with Run identity",
+    "stream durable terminal run.suspended",
+    "rejection scenario reaches approval",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "rejecting proposal leaves document head unchanged",
+    "rejected proposal has no committed receipt"
+  ],
+  "message_requests": 4,
+  "resume_requests": 2,
+  "streams": [
+    {
+      "terminal": "run.completed",
+      "deltas": 186,
+      "run_id": "39d8f37929de701e3bceb936b0c2635f"
+    },
+    {
+      "terminal": "run.suspended",
+      "deltas": 37,
+      "run_id": "0ba3e97da33e85dce65b9d3ed9f7950e"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 341,
+      "run_id": "0ba3e97da33e85dce65b9d3ed9f7950e"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 167,
+      "run_id": "3e7f79f6d8f7824b822b74e26217f0fc"
+    },
+    {
+      "terminal": "run.suspended",
+      "deltas": 0,
+      "run_id": "47198b07ca88c5b030bc61deccd5a28b"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 248,
+      "run_id": "47198b07ca88c5b030bc61deccd5a28b"
+    }
+  ],
+  "status": "passed",
+  "document_id": "9a741781b574299ad524dcc8d417c6fe",
+  "version_ids": [
+    "e6f9590eddc0de37647f29e3c095837a",
+    "6cff7c70b332dab25dfcb34d5c897a74"
+  ],
+  "recorded_at": "2026-10-17T14:04:46.855885+08:00",
+  "environment": "isolated real Docker Compose MySQL/MinIO/Elasticsearch/Tika/Ollama bge-m3 plus configured real chat model; synthetic documents only",
+  "command": "MAGWORKSPACE_ACCEPTANCE_DIR=<private temp directory> python3 scripts/smoke-workbench.py",
+  "backend_rebuild": "MAGWORKSPACE_ACCEPTANCE_DIR=<same private temp directory> python3 scripts/acceptance-stack.py rebuild",
+  "script_sha256": "bf727aa04cc30b736cd31dfe5953b2e85186995a1d78ba91ecfbb7f932ed2b97",
+  "credential_policy": "private fixture and model credentials remain in disposable temp directory; no credentials included in public report"
+}

@@ -1,0 +1,35 @@
+{
+  "readyz": {
+    "data": {
+      "redis": "ready",
+      "status": "ready"
+    },
+    "success": true
+  },
+  "http://127.0.0.1:8080/healthz": {
+    "status": 200
+  },
+  "http://127.0.0.1:8080/": {
+    "status": 200
+  },
+  "http://127.0.0.1:8080/api/v1/workspaces": {
+    "status": 401
+  },
+  "http://127.0.0.1:8080/api/v1/workspaces/": {
+    "status": 404
+  },
+  "http://127.0.0.1:8080/assets": "source hashes match",
+  "http://127.0.0.1:5173/healthz": {
+    "status": 200
+  },
+  "http://127.0.0.1:5173/": {
+    "status": 200
+  },
+  "http://127.0.0.1:5173/api/v1/workspaces": {
+    "status": 401
+  },
+  "http://127.0.0.1:5173/api/v1/workspaces/": {
+    "status": 404
+  },
+  "http://127.0.0.1:5173/assets": "source hashes match"
+}

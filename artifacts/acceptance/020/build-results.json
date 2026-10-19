@@ -1,0 +1,6 @@
+{
+  "status": "passed",
+  "command": "docker compose --profile app build backend",
+  "image": "sha256:e71d46f3c1c20037b433f6ef48d1634c658d852f317d9ab7f49770475304e953",
+  "source_manifest": "source-hashes.json"
+}

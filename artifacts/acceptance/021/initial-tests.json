@@ -1,0 +1,13 @@
+{
+  "bridge_all": {
+    "passed_tests_including_subtests": 233,
+    "skipped_tests": [],
+    "failed": [
+      "TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence/false",
+      "TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence/true",
+      "TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence",
+      "magworkspace/internal/agent"
+    ],
+    "exit_code": 1
+  }
+}

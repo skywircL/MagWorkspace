@@ -1,0 +1,32 @@
+{
+  "status": "passed",
+  "browser": "Codex in-app browser",
+  "checks": [
+    "login",
+    "upload via file chooser",
+    "real hybrid search",
+    "literal HTML displayed safely",
+    "online edit creates immutable version",
+    "create session",
+    "SSE live update proposal",
+    "pending approval survives reload and login",
+    "approve via browser creates v3",
+    "new live answer cites v3",
+    "fixed citation dialog",
+    "ask_user options resume to completion",
+    "stop cancels without automatic resubmission",
+    "create and switch workspace"
+  ],
+  "version_numbers": [
+    3,
+    2,
+    1
+  ],
+  "source_hashes_verified": true,
+  "head_index": "ready",
+  "message_count": 7,
+  "last_run": {
+    "status": "failed",
+    "error_code": "agent_canceled"
+  }
+}

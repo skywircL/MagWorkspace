@@ -1,0 +1,1188 @@
+import { consumeEvents, changedLines, validateUpload, indexPresentation, renderAnswer } from "./core.js";
+const $ = (id) => document.getElementById(id);
+const state = {
+  auth: null,
+  userID: "",
+  spaces: [],
+  wid: "",
+  sid: "",
+  rid: "",
+  docPage: 1,
+  docTotal: 0,
+  sessionPage: 1,
+  messagePage: 1,
+  busy: false,
+  controller: null,
+  promptID: "",
+  register: false,
+  runStatus: "",
+};
+let authEpoch = 0;
+const authChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("magworkspace-auth") : null;
+let refreshing = null,
+  noticeTimer;
+const enc = encodeURIComponent;
+const wp = () => "/api/v1/workspaces/" + enc(state.wid);
+const sp = () => wp() + "/sessions/" + enc(state.sid);
+const rp = () => sp() + "/runs/" + enc(state.rid);
+function node(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+function note(text) {
+  $("notice").textContent = text;
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => ($("notice").textContent = ""), 9000);
+}
+function button(text, fn, cls) {
+  const b = node("button", text, cls);
+  b.type = "button";
+  b.addEventListener("click", () => act(fn));
+  return b;
+}
+function busy(on) {
+  state.busy = on;
+  document.querySelectorAll("button,input,select,textarea").forEach((e) => {
+    if (on) {
+      e.dataset.wasDisabled = String(e.disabled);
+      e.disabled = true;
+    } else if (e.dataset.wasDisabled !== undefined) {
+      e.disabled = e.dataset.wasDisabled === "true";
+      delete e.dataset.wasDisabled;
+    }
+  });
+  $("activity").hidden = !on;
+  $("shell").setAttribute("aria-busy", String(on));
+  if (!on) syncAvailability();
+  $("jump-latest").disabled = false;
+  $("stop").disabled = false;
+  $("stop").hidden = !state.controller;
+}
+async function act(fn) {
+  if (state.busy) return;
+  busy(true);
+  try {
+    await fn();
+  } catch (e) {
+    note(e.message || "操作失败，请刷新状态后检查结果");
+  } finally {
+    busy(false);
+    rememberNavigation();
+  }
+}
+function bind(id, fn) {
+  $(id).addEventListener("click", () => act(fn));
+}
+function form(id, fn) {
+  $(id).addEventListener("submit", (e) => {
+    e.preventDefault();
+    const data = new FormData(e.target);
+    act(() => fn(data));
+  });
+}
+async function errorResponse(r) {
+  let code = "http_" + r.status;
+  try {
+    code = (await r.json()).error?.code || code;
+  } catch {}
+  const labels = {
+    unauthorized: "登录已过期，请重新登录",
+    conflict: "状态已改变或有运行尚未结束，请刷新后核对；未自动重试",
+    forbidden: "当前角色没有此操作权限",
+    not_found: "资源不存在或你已无权访问",
+    agent_unavailable: "Agent 尚未配置",
+    registration_disabled: "注册已关闭",
+    invalid_request: "输入格式不正确或超过限制",
+    rate_limited: "请求过于频繁，请稍后再试",
+  };
+  return new Error(labels[code] || "操作未完成：" + code);
+}
+function guardResponse(response, epoch) {
+  // Headers can arrive before logout while a private response body is still
+  // downloading. Check again after every asynchronous body read.
+  for (const method of ["json", "text", "blob", "arrayBuffer"]) {
+    const read = response[method].bind(response);
+    response[method] = async (...args) => {
+      const value = await read(...args);
+      if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+      return value;
+    };
+  }
+  return response;
+}
+async function browserAuth(action, data = {}) {
+  const epoch = authEpoch;
+  const response = await fetch("/api/v1/auth/browser/" + action, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-Magworkspace-Browser": "1" },
+    body: JSON.stringify(data),
+  });
+  const r = guardResponse(response, epoch);
+  if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+  if (!r.ok) {
+    const error = await errorResponse(r);
+    if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+    error.status = r.status;
+    throw error;
+  }
+  return r.status === 204 ? null : (await r.json()).data;
+}
+async function authLock(fn) {
+  return navigator.locks ? navigator.locks.request("magworkspace-auth", fn) : fn();
+}
+function announceCredentials() {
+  if (state.auth && state.userID) authChannel?.postMessage({
+    kind: "credentials", userID: state.userID,
+    token: state.auth.token, expires_at: state.auth.expires_at,
+  });
+}
+async function renew(force = false) {
+  if (!force && (!state.auth || Date.parse(state.auth.expires_at) > Date.now() + 30000)) return;
+  if (!refreshing) {
+    const epoch = authEpoch;
+    refreshing = authLock(async () => {
+      try {
+        const credentials = await browserAuth("refresh");
+        if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+        state.auth = credentials;
+        announceCredentials();
+      } catch (error) {
+        if (error.status === 401) resetAuth();
+        throw error;
+      }
+    }).finally(() => { refreshing = null; });
+  }
+  await refreshing;
+}
+async function request(
+  path,
+  { method = "GET", data, raw = false, signal, stream = false, retried = false } = {},
+) {
+  await renew();
+  const epoch = authEpoch;
+  const headers = {};
+  if (state.auth) headers.Authorization = "Bearer " + state.auth.token;
+  if (data !== undefined && !(data instanceof FormData)) {
+    headers["Content-Type"] = "application/json";
+    data = JSON.stringify(data);
+  }
+  if (stream) headers.Accept = "text/event-stream";
+  const r = guardResponse(await fetch(path, { method, headers, body: data, signal, credentials: "same-origin" }), epoch);
+  if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+  if (stream && r.headers.get("X-Run-ID"))
+    state.rid = r.headers.get("X-Run-ID");
+  if (!r.ok) {
+    const error = await errorResponse(r);
+    if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+    if (r.status === 401 && state.auth && !retried) {
+      await renew(true);
+      // Only read requests are safe to repeat; never replay a business mutation.
+      if (method === "GET") return request(path, { method, raw, signal, stream, retried: true });
+      throw Error("登录状态已更新，请核对结果后再次操作；未自动重试");
+    }
+    if (r.status === 401) resetAuth();
+    throw error;
+  }
+  if (raw || stream) return r;
+  if (r.status === 204) return null;
+  return r.json();
+}
+async function api(path, method = "GET", data) {
+  return (await request(path, { method, data }))?.data;
+}
+function empty(target, text) {
+  target.replaceChildren(node("p", text, "empty"));
+}
+function pager(id, result, onPage) {
+  const e = $(id);
+  e.replaceChildren();
+  const max = Math.max(1, Math.ceil(result.total / result.page_size));
+  if (max === 1) return;
+  const prev = button("上一页", () => onPage(result.page - 1));
+  prev.disabled = result.page <= 1;
+  const next = button("下一页", () => onPage(result.page + 1));
+  next.disabled = result.page >= max;
+  e.append(
+    prev,
+    node("small", `${result.page} / ${max} · ${result.total} 条`),
+    next,
+  );
+}
+function syncAvailability() {
+  const hasSpace = Boolean(state.wid);
+  $("show-upload").disabled = !hasSpace || !writable();
+  $("upload-form").querySelectorAll("input,button").forEach((e) => {
+    e.disabled = !hasSpace || !writable();
+  });
+  $("new-session").disabled = !hasSpace;
+  $("refresh-docs").disabled = !hasSpace;
+  $("search-form").querySelectorAll("input,select,button").forEach((e) => {
+    e.disabled = !hasSpace;
+  });
+  const hasSession = hasSpace && Boolean(state.sid);
+  $("rename-session").disabled = !hasSession;
+  $("delete-session").disabled = !hasSession;
+  $("refresh-chat").disabled = !hasSession;
+  $("send").disabled = !hasSession || ["running", "suspended"].includes(state.runStatus);
+  $("query").disabled = !hasSession;
+  $("composer-hint").textContent = state.runStatus === "suspended"
+    ? "请先答复或处理上方审批，再继续提问"
+    : state.runStatus === "running" ? "Agent 正在处理，完成后可继续提问" : "Ctrl / ⌘ + Enter 发送 · Enter 换行";
+  $("query").placeholder = hasSession
+    ? "查找资料、核对条款，或请 Agent 更新文档…"
+    : "先新建或选择一个会话，开始与知识对话";
+}
+function showView(view) {
+  $("shell").classList.toggle("chat-mode", view === "chat");
+  $("docs-view").hidden = view !== "docs";
+  $("chat-view").hidden = view !== "chat";
+  $("page-title").textContent = view === "docs" ? "文档知识库" : "Agent 会话";
+  $("nav-docs").classList.toggle("active", view === "docs");
+  $("nav-chat").classList.toggle("active", view === "chat");
+  $("nav-docs").setAttribute("aria-current", view === "docs" ? "page" : "false");
+  $("nav-chat").setAttribute("aria-current", view === "chat" ? "page" : "false");
+  $("page-description").textContent = view === "docs"
+    ? "让资料井然有序，让每个答案有据可循。"
+    : "检索知识、追溯来源，与 Agent 一起完成工作。";
+  history.replaceState(null, "", view === "chat" ? "#chat" : "#docs");
+}
+function showDetail(title) {
+  $("detail").classList.remove("source-drawer");
+  $("detail-title").textContent = title;
+  $("detail-body").replaceChildren();
+  if (!$("detail").open) $("detail").showModal();
+  return $("detail-body");
+}
+function editDialog(title, initial, save) {
+  const body = showDetail(title),
+    f = node("form"),
+    label = node("label", title),
+    input = node("input");
+  input.value = initial;
+  input.required = true;
+  input.setAttribute("aria-label", title);
+  label.append(input);
+  const submit = node("button", "保存", "primary");
+  submit.type = "submit";
+  f.append(label, submit);
+  body.append(f);
+  f.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    if (value)
+      act(async () => {
+        await save(value);
+      });
+  });
+  input.focus();
+}
+function confirmDialog(title, message, confirm) {
+  const body = showDetail(title);
+  body.append(node("p", message), button("确认删除", confirm, "danger"));
+}
+function writable() {
+  return ["owner", "admin", "contributor"].includes(
+    state.spaces.find((x) => x.id === state.wid)?.role,
+  );
+}
+function roleLabel() {
+  return { owner: "所有者", admin: "管理员", contributor: "协作者", viewer: "只读成员" }[
+    state.spaces.find((w) => w.id === state.wid)?.role
+  ] || "暂无空间";
+}
+function clearSearch() {
+  $("search-results").replaceChildren();
+  $("search-summary").textContent = "";
+  $("clear-search").hidden = true;
+  $("documents").hidden = false;
+  $("doc-pages").hidden = false;
+  $("doc-columns").hidden = false;
+  $("doc-list-heading").textContent = "全部文档";
+  $("doc-total").textContent = state.docTotal;
+  $("search-form").reset();
+}
+function resetAuth() {
+  authEpoch++;
+  state.controller?.abort();
+  state.auth = null;
+  state.userID = "";
+  try { sessionStorage.removeItem("magworkspace.navigation"); } catch {}
+  $("auth-restoring").hidden = true;
+  state.spaces = [];
+  state.wid = state.sid = state.rid = state.runStatus = "";
+  $("shell").hidden = true;
+  $("auth").hidden = false;
+  for (const id of ["messages", "prompt", "run-state", "draft", "documents", "sessions", "search-results", "detail-body", "identity", "workspace"])
+    $(id).replaceChildren();
+  $("query").value = "";
+  $("search-form").reset();
+  $("upload-form").reset();
+  $("detail").close();
+  $("upload-dialog").close();
+}
+async function uploadLimits() {
+  const limits = await api("/api/v1/config");
+  validateUpload({ name: "check", size: 0 }, limits);
+  $("upload-limit").textContent =
+    `支持 TXT、Markdown、PDF、DOCX · 单文件最大 ${limits.max_file_size_mb} MB`;
+  return limits;
+}
+async function loadSpaces() {
+  await uploadLimits();
+  const me = await api("/api/v1/auth/me");
+  state.userID = me.user.id;
+  state.spaces = me.workspaces || [];
+  $("identity").textContent = me.user.name + " · " + me.user.email;
+  const select = $("workspace");
+  select.replaceChildren();
+  for (const w of state.spaces) {
+    const o = node("option", w.name);
+    o.value = w.id;
+    select.append(o);
+  }
+  if (!state.spaces.some((w) => w.id === state.wid))
+    state.wid = state.spaces[0]?.id || "";
+  select.value = state.wid;
+  $("role").textContent = roleLabel();
+  $("workspace-name").textContent = state.spaces.find((w) => w.id === state.wid)?.name || "工作空间";
+}
+async function switchSpace() {
+  state.sid = "";
+  state.rid = "";
+  state.docPage = state.sessionPage = state.messagePage = 1;
+  state.promptID = "";
+  state.runStatus = "";
+  state.docTotal = 0;
+  $("query").value = "";
+  $("chat-welcome").hidden = false;
+  $("doc-total").textContent = "0";
+  $("session-total").textContent = "0";
+  $("messages").replaceChildren();
+  $("prompt").replaceChildren();
+  $("run-state").replaceChildren();
+  $("session-title").textContent = "选择或创建会话";
+  clearSearch();
+  if (state.wid) {
+    await loadDocs();
+    await loadSessions();
+  } else {
+    empty($("documents"), "创建一个空间，开始收藏资料。");
+    $("sessions").replaceChildren();
+  }
+  $("role").textContent = roleLabel();
+  $("workspace-name").textContent = state.spaces.find((w) => w.id === state.wid)?.name || "工作空间";
+}
+function rememberNavigation() {
+  if (!state.auth || !state.userID) return;
+  try {
+    sessionStorage.setItem("magworkspace.navigation", JSON.stringify({
+      userID: state.userID, wid: state.wid, sid: state.sid,
+      view: $("chat-view").hidden ? "docs" : "chat",
+    }));
+  } catch { /* Browser storage restrictions do not prevent using the workspace. */ }
+}
+function savedNavigation() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem("magworkspace.navigation"));
+    if (saved?.userID === state.userID && typeof saved.wid === "string" && typeof saved.sid === "string"
+        && saved.wid.length < 100 && saved.sid.length < 100) return saved;
+  } catch {}
+  return null;
+}
+async function enterWorkspace() {
+  await loadSpaces();
+  const saved = savedNavigation();
+  if (saved && state.spaces.some((w) => w.id === saved.wid)) {
+    state.wid = saved.wid;
+    $("workspace").value = state.wid;
+  }
+  $("auth-restoring").hidden = true;
+  $("auth").hidden = true;
+  $("shell").hidden = false;
+  showView(saved?.view === "chat" || (!saved && location.hash === "#chat") ? "chat" : "docs");
+  await switchSpace();
+  if (saved?.sid && saved.wid === state.wid) {
+    try {
+      const session = await api(wp() + "/sessions/" + enc(saved.sid));
+      state.sid = session.id;
+      $("session-title").textContent = session.title;
+      await loadMessages(true);
+      await loadSessions();
+    } catch (error) {
+      if (!state.auth) throw error;
+      state.sid = state.rid = state.runStatus = "";
+      note("原会话暂不可访问，可从会话列表重新选择。");
+    }
+  }
+  announceCredentials();
+}
+async function restoreLogin() {
+  const epoch = authEpoch;
+  $("auth-restoring").hidden = false;
+  $("auth").hidden = true;
+  $("shell").hidden = true;
+  $("restore-message").textContent = "正在恢复登录状态…";
+  $("retry-auth").hidden = true;
+  $("use-login").hidden = true;
+  try {
+    await renew(true);
+    await enterWorkspace();
+  } catch (error) {
+    if (epoch !== authEpoch) return;
+    if (error.status === 401) { resetAuth(); return; }
+    $("auth").hidden = true;
+    $("shell").hidden = true;
+    $("auth-restoring").hidden = false;
+    $("restore-message").textContent = "暂时无法恢复登录，请检查后端连接后重试。";
+    $("retry-auth").hidden = false;
+    $("use-login").hidden = false;
+  }
+}
+form("auth-form", async (f) => {
+  const data = { email: f.get("email"), password: f.get("password") };
+  if (state.register) data.name = f.get("name");
+  await authLock(async () => {
+    state.auth = await browserAuth(state.register ? "register" : "login", data);
+  });
+  $("auth-form").reset();
+  await enterWorkspace();
+});
+bind("auth-toggle", () => {
+  state.register = !state.register;
+  $("name-label").hidden = !state.register;
+  $("auth-form").elements.name.required = state.register;
+  $("auth-form").elements.password.autocomplete = state.register ? "new-password" : "current-password";
+  $("auth-submit").textContent = state.register ? "创建账号" : "登录工作台";
+  $("auth-toggle").textContent = state.register
+    ? "已有账号？登录"
+    : "还没有账号？注册";
+});
+bind("logout", async () => {
+  await authLock(() => browserAuth("logout"));
+  authChannel?.postMessage({ kind: "logout" });
+  resetAuth();
+});
+$("workspace").addEventListener("change", () =>
+  act(async () => {
+    state.wid = $("workspace").value;
+    await loadSpaces();
+    await switchSpace();
+  }),
+);
+bind("new-workspace", () =>
+  editDialog("新空间名称", "", async (name) => {
+    const w = await api("/api/v1/workspaces", "POST", { name });
+    state.wid = w.id;
+    await loadSpaces();
+    await switchSpace();
+    $("detail").close();
+  }),
+);
+bind("nav-docs", async () => {
+  showView("docs");
+  await loadDocs();
+});
+bind("nav-chat", async () => {
+  showView("chat");
+  await loadSessions();
+  if (state.sid) await loadMessages();
+});
+bind("close-detail", () => $("detail").close());
+async function loadDocs() {
+  if (!state.wid) return;
+  const result = await request(wp() + `/documents?page=${state.docPage}&page_size=10`);
+  if (!result.data?.length && result.total > 0 && state.docPage > 1) {
+    state.docPage--;
+    return loadDocs();
+  }
+  state.docTotal = result.total;
+  if ($("clear-search").hidden) $("doc-total").textContent = result.total;
+  const target = $("documents");
+  target.replaceChildren();
+  if (!result.data?.length) {
+    empty(target, writable() ? "知识库还空着。上传第一份资料，让知识在这里积累。" : "当前空间还没有文档，请联系协作者添加资料。");
+  }
+  // Index reads are independent. Render metadata immediately and check this page together.
+  await Promise.allSettled((result.data || []).map(async (d) => {
+    const card = node("article", undefined, "document-row");
+    const icon = node("div", "文档", "file-icon");
+    icon.setAttribute("aria-hidden", "true");
+    const meta = node("div", undefined, "document-meta");
+    meta.append(
+      button(d.title, () => documentDetail(d.id), "document-title"),
+      node("small", "更新于 " + new Date(d.updated_at).toLocaleString("zh-CN")),
+    );
+    const badge = node("span", "检查索引…", "pill status-pending");
+    badge.setAttribute("role", "status");
+    card.append(icon, meta, badge, button("查看详情 →", () => documentDetail(d.id), "text-button"));
+    target.append(card);
+    try {
+      const job = await api(wp() + `/documents/${enc(d.id)}/versions/${enc(d.current_version_id)}/index`);
+      const status = indexPresentation(job);
+      badge.textContent = status.label;
+      badge.className = "pill " + status.className;
+      if (job.error_code) badge.title = job.error_code;
+    } catch (e) {
+      badge.textContent = "索引不可用";
+      badge.className = "pill status-unavailable";
+      badge.title = e.message;
+    }
+  }));
+  pager("doc-pages", result, async (p) => {
+    state.docPage = p;
+    await loadDocs();
+  });
+}
+bind("refresh-docs", loadDocs);
+bind("show-upload", () => {
+  if (!writable()) throw Error("当前角色没有上传权限");
+  $("upload-dialog").showModal();
+});
+bind("close-upload", () => $("upload-dialog").close());
+bind("clear-search", clearSearch);
+form("upload-form", async (f) => {
+  if (!state.wid) throw Error("请先创建空间");
+  const file = f.get("file");
+  validateUpload(file, await uploadLimits());
+  const data = new FormData();
+  data.set("file", file);
+  if (f.get("title").trim()) data.set("title", f.get("title").trim());
+  await api(wp() + "/documents", "POST", data);
+  $("upload-form").reset();
+  $("upload-dialog").close();
+  clearSearch();
+  state.docPage = 1;
+  await loadDocs();
+  note("上传成功，后台正在处理文档。");
+});
+async function download(path, filename) {
+  const r = await request(path, { raw: true });
+  const url = URL.createObjectURL(await r.blob());
+  const a = node("a");
+  a.href = url;
+  a.download = filename;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+async function documentDetail(id, page = 1) {
+  const base = wp() + "/documents/" + enc(id);
+  const d = await api(base);
+  const versions = await request(base + `/versions?page=${page}&page_size=10`);
+  const body = showDetail(d.title);
+  body.append(node("small", "文档 ID：" + d.id));
+  if (writable()) {
+    const actions = node("div", undefined, "toolbar");
+    actions.append(
+      button("修改标题", () =>
+        editDialog("文档标题", d.title, async (title) => {
+          await api(base, "PATCH", { title });
+          await documentDetail(id, page);
+          await loadDocs();
+        }),
+      ),
+      button(
+        "删除文档",
+        () =>
+          confirmDialog(
+            "删除文档",
+            "删除后文档和历史版本将不可访问，当前界面不支持恢复。请确认目标：" +
+              d.title,
+            async () => {
+              await api(base, "DELETE");
+              $("detail").close();
+              await loadDocs();
+            },
+          ),
+        "danger",
+      ),
+    );
+    body.append(actions);
+    const replace = node("form", undefined, "toolbar"),
+      input = node("input");
+    input.type = "file";
+    input.required = true;
+    input.setAttribute("aria-label", "替换文档文件");
+    replace.append(input, node("button", "上传新版本"));
+    replace.addEventListener("submit", (e) => {
+      e.preventDefault();
+      act(async () => {
+        const file = input.files[0];
+        validateUpload(file, await uploadLimits());
+        const f = new FormData();
+        f.set("file", file);
+        f.set("base_version_id", d.current_version_id);
+        await api(base + "/versions", "POST", f);
+        await documentDetail(id);
+        await loadDocs();
+      });
+    });
+    body.append(replace);
+  }
+  for (const v of versions.data || []) {
+    const card = node("div", undefined, "card");
+    card.append(
+      node(
+        "h2",
+        `版本 ${v.number} · ${v.filename}${v.id === d.current_version_id ? " · 当前版本" : ""}`,
+      ),
+      node(
+        "small",
+        `${v.size_bytes} 字节 · ${new Date(v.created_at).toLocaleString()} · ${v.id}`,
+      ),
+    );
+    const path = base + "/versions/" + enc(v.id),
+      actions = node("div", undefined, "toolbar");
+    actions.append(
+      button("下载原文", () => download(path + "/content", v.filename)),
+    );
+    if (/\.(txt|md|markdown)$/i.test(v.filename)) {
+      actions.append(
+        button("查看正文", async () => {
+          const text = await (
+            await request(path + "/content", { raw: true })
+          ).text();
+          const preview = showDetail(`${d.title} · 版本 ${v.number}`);
+          preview.append(node("pre", text));
+          if (
+            writable() &&
+            v.id === d.current_version_id &&
+            v.size_bytes <= 1024 * 1024
+          ) {
+            const label = node("label", "编辑全文（保存为新版本）"),
+              edit = node("textarea");
+            edit.rows = 12;
+            edit.value = text;
+            edit.setAttribute("aria-label", "文档正文");
+            label.append(edit);
+            preview.append(
+              label,
+              button(
+                "保存新版本",
+                async () => {
+                  await api(base + "/content", "PUT", {
+                    base_version_id: v.id,
+                    content: edit.value,
+                  });
+                  await documentDetail(id);
+                  await loadDocs();
+                  note("新版本已保存，等待索引。");
+                },
+                "primary",
+              ),
+            );
+          }
+        }),
+      );
+    }
+    if (writable() && v.id === d.current_version_id)
+      actions.append(
+        button("重试索引", async () => {
+          await api(path + "/index", "POST", {});
+          note("已提交索引任务。");
+          await loadDocs();
+        }),
+      );
+    card.append(actions);
+    body.append(card);
+  }
+  const pages = node("div", undefined, "pager");
+  if (page > 1)
+    pages.append(button("更新的版本", () => documentDetail(id, page - 1)));
+  if (page * 10 < versions.total)
+    pages.append(button("更早的版本", () => documentDetail(id, page + 1)));
+  body.append(pages);
+}
+form("search-form", async (f) => {
+  const result = await api(wp() + "/search", "POST", {
+    query: f.get("query"),
+    mode: f.get("mode"),
+    limit: 10,
+  });
+  const target = $("search-results");
+  target.replaceChildren();
+  $("documents").hidden = true;
+  $("doc-pages").hidden = true;
+  $("doc-columns").hidden = true;
+  $("clear-search").hidden = false;
+  $("doc-list-heading").textContent = "检索结果";
+  $("doc-total").textContent = result.hits?.length || 0;
+  $("search-summary").textContent = `“${f.get("query")}” · ${result.hits?.length || 0} 个片段（最多 10 个）`;
+  if (!result.hits?.length)
+    target.append(node("p", "没有命中，请确认索引已完成。", "muted"));
+  for (const hit of result.hits || []) {
+    const c = hit.chunk;
+    const card = node("article", undefined, "card search-hit");
+    card.append(
+      node("h2", hit.title || c.title || "文档片段"),
+      node("pre", c.content),
+      button("查看来源文档", () => documentDetail(c.document_id)),
+    );
+    target.append(card);
+  }
+});
+async function loadSessions() {
+  if (!state.wid) return;
+  const result = await request(
+    wp() + `/sessions?page=${state.sessionPage}&page_size=10`,
+  );
+  if (!result.data?.length && result.total > 0 && state.sessionPage > 1) {
+    state.sessionPage--;
+    return loadSessions();
+  }
+  $("session-total").textContent = result.total;
+  $("sessions").replaceChildren();
+  if (!result.data?.length) empty($("sessions"), "还没有会话，点击上方新建。");
+  for (const s of result.data || [])
+    $("sessions").append(
+      button(
+        s.title,
+        async () => {
+          state.sid = s.id;
+          state.rid = "";
+          state.messagePage = 1;
+          state.runStatus = "";
+          $("query").value = "";
+          $("session-title").textContent = s.title;
+          await loadMessages(true);
+          await loadSessions();
+        },
+        s.id === state.sid ? "selected" : "",
+      ),
+    );
+  pager("session-pages", result, async (p) => {
+    state.sessionPage = p;
+    await loadSessions();
+  });
+}
+bind("new-session", () =>
+  editDialog("会话名称", "新会话", async (title) => {
+    const s = await api(wp() + "/sessions", "POST", { title });
+    state.sid = s.id;
+    state.rid = "";
+    state.messagePage = 1;
+    state.sessionPage = 1;
+    state.runStatus = "";
+    $("query").value = "";
+    showView("chat");
+    $("session-title").textContent = s.title;
+    await loadSessions();
+    await loadMessages();
+    $("detail").close();
+  }),
+);
+bind("rename-session", () => {
+  if (!state.sid) return;
+  editDialog("会话名称", $("session-title").textContent, async (title) => {
+    const session = await api(sp(), "PATCH", { title });
+    $("session-title").textContent = session.title;
+    await loadSessions();
+    $("detail").close();
+  });
+});
+bind("delete-session", () => {
+  if (!state.sid) return;
+  confirmDialog("删除会话", "此会话及其消息将被删除。请确认目标：" + $("session-title").textContent, async () => {
+    await api(sp(), "DELETE");
+    state.sid = state.rid = state.runStatus = "";
+    $("session-title").textContent = "选择或创建会话";
+    $("query").value = "";
+    for (const id of ["messages", "prompt", "run-state", "message-pages"]) $(id).replaceChildren();
+    $("chat-welcome").hidden = false;
+    await loadSessions();
+    $("detail").close();
+  });
+});
+document.querySelectorAll("[data-suggestion]").forEach((b) => {
+  b.addEventListener("click", () => {
+    if (state.busy) return;
+    if (!state.sid) { note("先点击「新建会话」，再选择你想完成的任务。"); return; }
+    $("query").value = b.dataset.suggestion;
+    $("query").focus();
+  });
+});
+$("query").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing && !$("send").disabled) {
+    e.preventDefault();
+    $("chat-form").requestSubmit();
+  }
+});
+async function showCitations(rid, selectedID = "", referenceOrder = []) {
+  const path = sp() + "/runs/" + enc(rid), workspace = wp();
+  const { citations: list = [] } = await api(path + "/citations");
+  const sourceOrder = [...referenceOrder];
+  for (const item of list) if (!sourceOrder.includes(item.evidence.evidence_id)) sourceOrder.push(item.evidence.evidence_id);
+  list.sort((a, b) => sourceOrder.indexOf(a.evidence.evidence_id) - sourceOrder.indexOf(b.evidence.evidence_id));
+  const selected = selectedID ? list.find((item) => item.evidence.evidence_id === selectedID) : null;
+  if (selectedID && !selected) throw Error("这条引用不在已保存的回答来源中，请刷新会话后核对。");
+  const full = selected ? await api(path + "/evidence/" + enc(selectedID)) : null;
+  const body = showDetail(selected ? "引用来源" : `回答来源 · ${list.length}`);
+  $("detail").classList.add("source-drawer");
+  body.append(node("p", "引用对应回答时使用的文档版本，可核对原文或下载留存。", "source-intro"));
+  if (selected) body.append(button("← 查看全部来源", () => showCitations(rid, "", referenceOrder), "text-button"));
+  for (const item of selected ? [selected] : list) {
+    const e = item.evidence;
+    const card = node("article", undefined, "card source-card");
+    card.append(node("span", "来源 " + (sourceOrder.indexOf(e.evidence_id) + 1), "source-number"), node("h2", e.title));
+    const content = node("pre", full?.evidence.content || e.content || "点击读取片段，核对回答依据。", "source-passage");
+    card.append(content);
+    const metadata = node("details", undefined, "source-locator");
+    metadata.append(node("summary", "版本与片段定位"), node("small", `版本 ${e.version_id} · 抽取文本字节 ${e.start_byte}–${e.end_byte}（非 PDF 页码）`));
+    card.append(metadata);
+    if (!full) card.append(button("读取片段", async () => {
+      const result = await api(path + "/evidence/" + enc(e.evidence_id));
+      content.textContent = result.evidence.content;
+    }, "quiet"));
+    card.append(button("下载该版本", async () => {
+      const base = workspace + `/documents/${enc(e.document_id)}/versions/${enc(e.version_id)}`;
+      const version = await api(base);
+      return download(base + "/content", version.filename);
+    }, "quiet"));
+    body.append(card);
+  }
+  if (!list.length) body.append(node("p", "本回答没有已提交的文档引用。"));
+}
+function updateScrollButton() {
+  const scroller = document.querySelector(".conversation-scroll");
+  $("jump-latest").hidden = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+}
+function scrollConversation() {
+  const scroller = document.querySelector(".conversation-scroll");
+  scroller.scrollTop = scroller.scrollHeight;
+  updateScrollButton();
+}
+document.querySelector(".conversation-scroll").addEventListener("scroll", updateScrollButton, { passive: true });
+$("jump-latest").addEventListener("click", scrollConversation);
+function messageCard(m) {
+  const assistant = m.role === "assistant";
+  const card = node("article", undefined, "message " + (assistant ? "assistant" : "user"));
+  const header = node("header", undefined, "message-heading");
+  header.append(node("span", assistant ? "✦" : "你", "message-avatar"), node("strong", assistant ? "Agent" : "你"));
+  if (m.created_at && Number.isFinite(Date.parse(m.created_at))) {
+    const time = node("time", new Date(m.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+    time.dateTime = m.created_at; header.append(time);
+  }
+  const content = node("div", undefined, "message-content" + (assistant ? " answer-markdown" : ""));
+  card.append(header, content);
+  if (assistant) {
+    const references = [];
+    const count = renderAnswer(content, m.content, { onCitation: (id) => act(() => showCitations(m.run_id, id, references)) });
+    for (const mark of content.querySelectorAll(".citation-mark")) if (!references.includes(mark.dataset.evidence)) references.push(mark.dataset.evidence);
+    const actions = node("footer", undefined, "message-actions");
+    actions.append(button("复制回答", async () => {
+      await navigator.clipboard.writeText(m.content);
+      note("回答已复制");
+    }, "text-button"), button(count ? `查看引用 · ${count}` : "查看引用", () => showCitations(m.run_id, "", references), "text-button"));
+    card.append(actions);
+  } else content.textContent = m.content;
+  return card;
+}
+async function loadMessages(latest = false) {
+  if (!state.sid) return;
+  let result = await request(
+    sp() + `/messages?page=${state.messagePage}&page_size=20`,
+  );
+  if (latest && result.total > 20) {
+    state.messagePage = Math.ceil(result.total / 20);
+    result = await request(
+      sp() + `/messages?page=${state.messagePage}&page_size=20`,
+    );
+  }
+  const target = $("messages");
+  $("chat-welcome").hidden = Boolean(result.data?.length);
+  target.replaceChildren();
+  $("prompt").replaceChildren();
+  $("run-state").replaceChildren();
+  state.promptID = "";
+  for (const m of result.data || []) target.append(messageCard(m));
+
+  pager("message-pages", result, async (p) => {
+    state.messagePage = p;
+    state.rid = "";
+    await loadMessages();
+  });
+  let last = result.data?.at(-1);
+  // Browsing older messages must not hide a newer suspended/running Run.
+  if (result.page * result.page_size < result.total) {
+    const tail = await request(sp() + `/messages?page=${Math.ceil(result.total / 20)}&page_size=20`);
+    last = tail.data?.at(-1);
+  }
+  state.rid = last?.run_id || "";
+  state.runStatus = "";
+  if (state.rid) await inspectRun();
+  if (latest) scrollConversation(); else updateScrollButton();
+}
+async function inspectRun() {
+  if (!state.rid) return;
+  const run = await api(rp());
+  state.runStatus = run.status;
+  const recoverable = run.status === "failed" && ["agent_failed", "interrupted", "lease_expired"].includes(run.error_code);
+  const status = node("section", undefined, "run-notice " + (run.status === "failed" ? "run-failed" : ""));
+  $("run-state").replaceChildren();
+  if (run.status !== "completed") {
+    const labels = {
+      running: ["Agent 正在处理问题", "刷新状态可查看最新结果，请勿重复发送。"],
+      failed: [run.error_code === "agent_canceled" ? "生成已停止" : "这次回答尚未完成", recoverable
+        ? "你的问题已保留。可恢复原运行，或继续发送新问题。"
+        : "你的问题已保留，可以继续发送新问题。"],
+      suspended: ["等待你的确认", "完成下方答复或审批后，Agent 将继续处理。"],
+    };
+    const [title, description] = labels[run.status] || ["运行状态待确认", "请刷新状态后查看结果。"];
+    status.append(node("strong", title), node("p", description));
+    if (run.error_code) {
+      const details = node("details");
+      details.append(node("summary", "错误详情"), node("code", run.error_code)); status.append(details);
+    }
+    $("run-state").append(status);
+  }
+  if (recoverable)
+    status.append(
+      button("尝试恢复原运行", () => stream(rp() + "/recover", {}), "quiet"),
+    );
+  if (run.status === "suspended") {
+    const p = await api(rp() + "/prompt");
+    await renderPrompt(p);
+  } else {
+    try {
+      const p = await api(rp() + "/prompt");
+      if (p.approval?.result) {
+        const receipt = node("div", "文档写入已提交；索引异步更新。", "card");
+        const result = p.approval.result;
+        receipt.append(
+          node(
+            "p",
+            `${result.document.title} · 版本 ${result.version.number} · ${result.version.size_bytes} 字节`,
+          ),
+          button("查看已写入文档", () => documentDetail(result.document.id)),
+        );
+        $("run-state").append(receipt);
+      }
+    } catch {
+      /* A run without prompts normally returns 404. */
+    }
+  }
+}
+async function renderPrompt(p) {
+  state.promptID = p.id;
+  const box = node("section", undefined, "prompt");
+  $("prompt").replaceChildren(box);
+  box.append(
+    node(
+      "h2",
+      p.kind === "tool_approval" ? "审阅文档变更" : "Agent 需要你补充信息",
+    ),
+    node("p", p.question),
+    node(
+      "small",
+      "状态：" +
+        p.status +
+        " · 到期：" +
+        new Date(p.expires_at).toLocaleString(),
+    ),
+  );
+  if (p.status !== "pending") return;
+  const path = rp() + "/prompts/" + enc(p.id);
+  if (p.kind === "tool_approval") {
+    const a = p.approval,
+      args = a.arguments;
+    box.append(
+      node(
+        "p",
+        `${a.tool === "create_document" ? "新建" : "更新"}：${a.title} / ${a.filename}`,
+      ),
+      node(
+        "small",
+        `目标：${a.document_id || "新文档"} · 基线：${a.base_version_id || "无"} · 新正文 ${a.content_bytes} 字节`,
+      ),
+    );
+    if (!args || typeof args.content !== "string")
+      throw Error("审批内容不可用，请刷新状态");
+    let before = "";
+    let reviewable = true;
+    if (a.base_version_id) {
+      try {
+        before = await (
+          await request(
+            wp() +
+              `/documents/${enc(a.document_id)}/versions/${enc(a.base_version_id)}/content`,
+            { raw: true },
+          )
+        ).text();
+      } catch (e) {
+        reviewable = false;
+        box.append(node("p", "基线读取失败，不能批准：" + e.message, "error"));
+      }
+    }
+    const diff = changedLines(before, args.content),
+      comparison = node("div", undefined, "comparison");
+    for (const [key, title, cls] of [
+      ["before", "修改前（固定基线）", "removed"],
+      ["after", "修改后（完整正文）", "added"],
+    ]) {
+      const col = node("div");
+      col.append(node("h2", title));
+      const pre = node("pre");
+      for (const line of diff[key])
+        pre.append(
+          node("div", line.text || "\u200b", line.changed ? cls : undefined),
+        );
+      col.append(pre);
+      comparison.append(col);
+    }
+    box.append(
+      comparison,
+      node("small", "标色为变化区段；批准仅授权此份提案，保存为独立新版本。"),
+    );
+    const approve = button(
+      "批准这次写入",
+      () => stream(path + "/approve", { approved: true }),
+      "primary",
+    );
+    approve.disabled = !reviewable;
+    box.append(
+      approve,
+      button("拒绝这次写入", () =>
+        stream(path + "/approve", { approved: false }),
+      ),
+    );
+  } else {
+    const input = node("textarea");
+    input.rows = 2;
+    input.setAttribute("aria-label", "答复 Agent");
+    for (const option of p.options || [])
+      box.append(
+        button(option, () => stream(path + "/answer", { answer: option })),
+      );
+    box.append(
+      input,
+      button(
+        "提交答复",
+        async () => {
+          if (!input.value.trim()) throw Error("请输入答复");
+          await stream(path + "/answer", { answer: input.value });
+        },
+        "primary",
+      ),
+    );
+  }
+  box.append(
+    button(
+      "取消整个等待",
+      async () => {
+        await api(path + "/cancel", "POST", {});
+        await loadMessages(true);
+      },
+      "danger",
+    ),
+  );
+}
+async function stream(path, data) {
+  const epoch = authEpoch;
+  state.controller = new AbortController();
+  $("stop").hidden = false;
+  $("draft").hidden = false;
+  const draftHeader = node("header", undefined, "message-heading");
+  const draftStatus = node("small", "正在连接 Agent…", "stream-status");
+  draftStatus.setAttribute("role", "status");
+  draftHeader.append(node("span", "✦", "message-avatar"), node("strong", "Agent"), draftStatus);
+  const draftBody = node("div", undefined, "message-content answer-markdown");
+  $("draft").replaceChildren(draftHeader, draftBody);
+  $("chat-welcome").hidden = true;
+  let draftText = "", paint = 0, userShown = false;
+  const scheduleDraft = () => {
+    if (paint) return;
+    paint = requestAnimationFrame(() => {
+      paint = 0;
+      if (epoch !== authEpoch || !state.controller) return;
+      const scroller = document.querySelector(".conversation-scroll");
+      const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+      renderAnswer(draftBody, draftText);
+      if (follow) scrollConversation(); else updateScrollButton();
+    });
+  };
+  $("prompt").replaceChildren();
+  scrollConversation();
+  let terminal = false, accepted = false;
+  try {
+    const r = await request(path, {
+      method: "POST",
+      data,
+      stream: true,
+      signal: state.controller.signal,
+    });
+    accepted = true;
+    terminal = await consumeEvents(r.body, async (name, payload) => {
+      if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+      const scroller = document.querySelector(".conversation-scroll");
+      const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100;
+      if (name === "run.started") {
+        state.rid = payload.run_id;
+        draftStatus.textContent = "正在准备回答…";
+        if (data.content && !userShown) {
+          $("messages").append(messageCard({ role: "user", content: data.content }));
+          userShown = true;
+        }
+      }
+      if (name === "message.start" || name === "message.discard") {
+        draftText = "";
+        draftStatus.textContent = name === "message.discard" ? "正在重新组织回答…" : "正在准备回答…";
+        scheduleDraft();
+      }
+      if (name === "message.delta") {
+        draftStatus.textContent = "正在生成回答…";
+        draftText += payload.delta;
+        scheduleDraft();
+      }
+      if (name === "run.completed") { draftText = payload.answer; draftStatus.textContent = "正在保存回答…"; scheduleDraft(); }
+      if (name === "run.failed") note("这次回答尚未完成，正在查询运行状态。");
+      if (follow) scrollConversation();
+    });
+    if (!terminal) note("连接已结束，正在查询已保存状态；不会自动重发。");
+  } catch (e) {
+    note(
+      e.name === "AbortError"
+        ? "已停止生成，正在查询运行状态。"
+        : e.message + "；正在检查已保存状态。",
+    );
+  } finally {
+    cancelAnimationFrame(paint);
+    state.controller = null;
+    $("stop").hidden = true;
+    $("draft").hidden = true;
+    $("draft").textContent = ""; // Always reconcile durable history after a delivery failure; never retry POST.
+    await loadMessages(true);
+  }
+  return accepted;
+}
+$("stop").addEventListener("click", () => state.controller?.abort());
+form("chat-form", async () => {
+  if (!state.sid) throw Error("请先创建或选择会话");
+  const content = $("query").value;
+  if (!content.trim()) return;
+  const accepted = await stream(sp() + "/messages", { content });
+  if (accepted) $("query").value = "";
+});
+bind("refresh-chat", async () => {
+  if (state.sid) await loadMessages(true);
+});
+
+bind("retry-auth", restoreLogin);
+bind("use-login", () => {
+  $("auth-restoring").hidden = true;
+  $("auth").hidden = false;
+});
+authChannel?.addEventListener("message", ({ data }) => {
+  if (data?.kind === "logout") { resetAuth(); return; }
+  if (data?.kind !== "credentials" || !state.auth) return;
+  if (state.userID && data.userID !== state.userID) {
+    resetAuth();
+    note("账号已在其他页面切换，请重新登录。");
+  } else if (typeof data.token === "string" && typeof data.expires_at === "string") {
+    state.auth = { token: data.token, expires_at: data.expires_at };
+  }
+});
+act(restoreLogin);

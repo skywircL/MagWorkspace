@@ -1,0 +1,236 @@
+name: magworkspace
+services:
+  redis:
+    image: redis:8.2-alpine
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - 'umask 077; printf "requirepass %s\nappendonly yes\nappendfsync everysec\nmaxmemory 128mb\nmaxmemory-policy noeviction\n" "$$REDIS_PASSWORD" > /tmp/redis.conf; chown redis:redis /tmp/redis.conf; exec docker-entrypoint.sh redis-server /tmp/redis.conf'
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 3s
+      timeout: 2s
+      retries: 30
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: magworkspace
+      MYSQL_USER: magworkspace
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Set MYSQL_ROOT_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-33069}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql -h 127.0.0.1 -u magworkspace -D magworkspace -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 2s
+      timeout: 3s
+      retries: 40
+  backend:
+    profiles: [app]
+    build: .
+    depends_on:
+      harness:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      ollama-model:
+        condition: service_completed_successfully
+      qdrant:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tika:
+        condition: service_healthy
+    environment:
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
+      DATABASE_URL: "magworkspace:${MYSQL_PASSWORD}@tcp(mysql:3306)/magworkspace?parseTime=true"
+      HTTP_ADDR: "0.0.0.0:8080"
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
+      MAGENT_MODE: ${MAGENT_MODE:-}
+      MAGENT_SERVICE_URL: http://harness:8090
+      MAGENT_SERVICE_API_KEY: ${MAGENT_SERVICE_API_KEY:?Set MAGENT_SERVICE_API_KEY in .env}
+      MAGENT_CALLBACK_ADDR: 0.0.0.0:8081
+      MAGENT_CALLBACK_BASE_URL: http://backend:8081
+      MAGENT_TIMEOUT: ${MAGENT_TIMEOUT:-120s}
+      METRICS_ADDR: ${METRICS_ADDR:-127.0.0.1:9091}
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      TRACING_SAMPLE_RATIO: ${TRACING_SAMPLE_RATIO:-0.1}
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://jaeger:4318/v1/traces}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      APP_ENV: ${APP_ENV:-development}
+      RETRIEVAL_EXECUTION: ${RETRIEVAL_EXECUTION:-qdrant_native}
+      DOCUMENT_INDEXING_ENABLED: ${DOCUMENT_INDEXING_ENABLED:-true}
+      TIKA_URL: http://tika:9998
+      EMBEDDING_BASE_URL: http://ollama:11434/v1
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3:567m}
+      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
+      EMBEDDING_REQUEST_TIMEOUT: ${EMBEDDING_REQUEST_TIMEOUT:-120s}
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      BM25_AVG_LEN: ${BM25_AVG_LEN:-256}
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_BUCKET: ${MINIO_BUCKET:-magworkspace}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+      INDEX_WORKERS: ${INDEX_WORKERS:-1}
+      INDEX_JOB_TIMEOUT: ${INDEX_JOB_TIMEOUT:-5m}
+    ports:
+      - "127.0.0.1:${HTTP_PORT:-8080}:8080"
+    expose:
+      - "8081"
+    stop_grace_period: 30s
+  harness:
+    profiles: [app]
+    build:
+      context: .
+      dockerfile: docker/harness/Dockerfile
+    environment:
+      MAGENT_SERVICE_API_KEY: ${MAGENT_SERVICE_API_KEY:?Set MAGENT_SERVICE_API_KEY in .env}
+      MAGENT_SERVICE_HOST: 0.0.0.0
+      MAGENT_SERVICE_PORT: "8090"
+      MAGENT_SERVICE_MAX_CONCURRENCY: ${MAGENT_SERVICE_MAX_CONCURRENCY:-4}
+      MAGENT_CALLBACK_ORIGIN: http://backend:8081
+      PYTHONPATH: /opt/magent-harness/src
+      MAGENT_MODE: ${MAGENT_MODE:-}
+      MAGENT_TIMEOUT: ${MAGENT_TIMEOUT:-120s}
+      MAGENT_MAX_CONTEXT_TOKENS: ${MAGENT_MAX_CONTEXT_TOKENS:-128000}
+      MAGENT_RESERVE_TOKENS: ${MAGENT_RESERVE_TOKENS:-16384}
+      MAGENT_KEEP_RECENT_TOKENS: ${MAGENT_KEEP_RECENT_TOKENS:-20000}
+      MAGENT_MAX_SUMMARY_TOKENS: ${MAGENT_MAX_SUMMARY_TOKENS:-2048}
+      MAGENT_MAX_COMPLETION_TOKENS: ${MAGENT_MAX_COMPLETION_TOKENS:-4096}
+      MAGENT_SUMMARY_TIMEOUT: ${MAGENT_SUMMARY_TIMEOUT:-60s}
+      MAGENT_BASE_URL: ${MAGENT_BASE_URL:-}
+      MAGENT_API_KEY: ${MAGENT_API_KEY:-}
+      MAGENT_MODEL: ${MAGENT_MODEL:-}
+    ports:
+      - "127.0.0.1:${MAGENT_SERVICE_PORT:-18090}:8090"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/healthz', timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    init: true
+    stop_grace_period: 30s
+    volumes:
+      - type: bind
+        source: "${MAGENT_HARNESS_PATH:-../Magent Harness}/src"
+        target: /opt/magent-harness/src
+        read_only: true
+        bind:
+          create_host_path: false
+  ollama:
+    profiles: [indexing, app]
+    image: ollama/ollama:0.40.5
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_KEEP_ALIVE: 5m
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11435}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+  ollama-model:
+    profiles: [indexing, app]
+    image: ollama/ollama:0.40.5
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      MODEL: ${EMBEDDING_MODEL:-bge-m3:567m}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ['ollama show "$$MODEL" >/dev/null 2>&1 || exec ollama pull "$$MODEL"']
+  qdrant:
+    profiles: [indexing, app]
+    image: qdrant/qdrant:v1.16.2
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
+      QDRANT__TELEMETRY_DISABLED: "true"
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-16333}:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333; printf 'GET /readyz HTTP/1.0\\r\\n\\r\\n' >&3; read -r line <&3; [[ $$line == *' 200 '* ]]"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  elasticsearch:
+    # Retained only to read/clean legacy derived data during migration.
+    profiles: [legacy-search]
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "127.0.0.1:${SEARCH_PORT:-19200}:9200"
+    volumes:
+      - search-data:/usr/share/elasticsearch/data
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=1s' >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+  minio:
+    build: ./docker/minio
+    image: magworkspace-minio:local
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+    ports:
+      - "127.0.0.1:${MINIO_PORT:-19000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - minio-data:/data
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9000/minio/health/ready"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  tika:
+    profiles: [indexing, app]
+    build: ./docker/tika
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9998/tika"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    ports:
+      - "127.0.0.1:${TIKA_PORT:-19998}:9998"
+    mem_limit: 1g
+    cpus: 2
+    pids_limit: 128
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  redis-data:
+  mysql-data:
+  ollama-models:
+  search-data:
+  qdrant-data:
+  minio-data:

@@ -1,0 +1,24 @@
+groups:
+  - name: magworkspace
+    rules:
+      - alert: MagWorkspaceMetricsUnavailable
+        expr: up{job="magworkspace"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: MagWorkspace metrics endpoint is unavailable
+      - alert: MagWorkspaceHTTPServerErrors
+        expr: sum(rate(magworkspace_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(magworkspace_http_requests_total[5m])), 0.01) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: MagWorkspace HTTP server error ratio exceeds 5 percent
+      - alert: MagWorkspaceIndexFailures
+        expr: sum(increase(magworkspace_operations_total{operation="index.process",outcome!="success"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: Document indexing has failed during the last 10 minutes

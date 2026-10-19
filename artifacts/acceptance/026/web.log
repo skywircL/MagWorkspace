@@ -1,0 +1,14 @@
+✔ SSE survives byte boundaries, heartbeat, Chinese and discard, then persisted terminal (5.89ms)
+✔ EOF without terminal is unknown, never success (0.626666ms)
+✔ suspension and failure both end connection (0.27575ms)
+✔ diff preserves all lines and marks changed block (0.786542ms)
+✔ upload policy follows deployment config and accepts exact limit (0.273375ms)
+✔ unrecognized index states cannot become ready or inject a CSS class (0.185459ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 70.935667

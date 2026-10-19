@@ -1,0 +1,4 @@
+query-id	corpus-id	score
+synthetic-dev-1	synthetic-overseas-travel	1
+synthetic-dev-1	synthetic-domestic-travel	0
+synthetic-dev-2	synthetic-domestic-travel	1

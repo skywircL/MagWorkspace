@@ -1,0 +1,84 @@
+{
+  "checks": [
+    "upload original bytes and ready index",
+    "lexical retrieves v1",
+    "vector retrieves v1",
+    "hybrid retrieves v1",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "real model retrieves random fact and amount",
+    "answer has verified citations",
+    "citation binds v1",
+    "fixed evidence readable",
+    "stream starts with Run identity",
+    "stream durable terminal run.suspended",
+    "model proposes native write approval",
+    "approval targets expected document",
+    "proposal changes only requested amount preserving exact other bytes",
+    "pending approval has no write side effect",
+    "pending approval reload persists",
+    "cross-user approval rejected 404",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "write committed receipt present",
+    "approval advances version head",
+    "new version exact proposed bytes",
+    "duplicate approval rejected without second version",
+    "stale human edit rejected",
+    "lexical only retrieves new head v2",
+    "vector only retrieves new head v2",
+    "hybrid only retrieves new head v2",
+    "immutable v1 unchanged",
+    "old citation remains bound to v1",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "fresh live answer cites v2 and new amount",
+    "stream starts with Run identity",
+    "stream durable terminal run.suspended",
+    "rejection scenario reaches approval",
+    "stream starts with Run identity",
+    "stream durable terminal run.completed",
+    "rejecting proposal leaves document head unchanged",
+    "rejected proposal has no committed receipt"
+  ],
+  "message_requests": 4,
+  "resume_requests": 2,
+  "streams": [
+    {
+      "terminal": "run.completed",
+      "deltas": 206,
+      "run_id": "fea22511e3992942dfd859e1dcc3f039"
+    },
+    {
+      "terminal": "run.suspended",
+      "deltas": 57,
+      "run_id": "84b651d07c730efdb2b3c47fcca8b016"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 279,
+      "run_id": "84b651d07c730efdb2b3c47fcca8b016"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 239,
+      "run_id": "e626b06684c75f0e5ffd7894bf61ad26"
+    },
+    {
+      "terminal": "run.suspended",
+      "deltas": 40,
+      "run_id": "a01e87ca74f8b4fd40c6471df3d3c758"
+    },
+    {
+      "terminal": "run.completed",
+      "deltas": 252,
+      "run_id": "a01e87ca74f8b4fd40c6471df3d3c758"
+    }
+  ],
+  "status": "passed",
+  "document_id": "4971a3571f60d44ddebb3f8459ae4e2c",
+  "version_ids": [
+    "1e3b32135d0bb676ec972db7a3447dfa",
+    "66433bf378a5392c7aa20d78b8eb1e22"
+  ]
+}

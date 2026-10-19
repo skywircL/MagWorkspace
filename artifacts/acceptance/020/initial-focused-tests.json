@@ -1,0 +1,15 @@
+{
+  "citation_targeted": {
+    "passed_tests_including_subtests": 18,
+    "skipped_tests": [],
+    "failed": [
+      "TestHarnessLiveRetrievalToolsAndCitationValidation/stream=false/identity_injection",
+      "TestHarnessLiveRetrievalToolsAndCitationValidation/stream=false/write_tool",
+      "TestHarnessLiveRetrievalToolsAndCitationValidation/stream=true/identity_injection",
+      "TestHarnessLiveRetrievalToolsAndCitationValidation/stream=true/write_tool",
+      "TestHarnessLiveRetrievalToolsAndCitationValidation",
+      "magworkspace/internal/agent"
+    ],
+    "exit_code": 1
+  }
+}

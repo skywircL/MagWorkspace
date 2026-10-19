@@ -1,0 +1,9 @@
+{
+  "index_http_regression": {
+    "passed_tests_including_subtests": 118,
+    "skipped_tests": [],
+    "failed": [],
+    "exit_code": 0
+  },
+  "vet_build_gofmt": "passed"
+}

@@ -1,0 +1,65 @@
+{
+  "fixture": false,
+  "scope": "Current frontend with disposable real MySQL, MinIO, Tika, Elasticsearch and Ollama; no new chat-model calls",
+  "started_at": "2026-10-17T06:33:04.985Z",
+  "backend": "http://127.0.0.1:55072",
+  "browser_origin": "http://127.0.0.1:55615",
+  "checks": [
+    {
+      "name": "served assets match the current frontend sources",
+      "status": "passed"
+    },
+    {
+      "name": "real browser registration creates authenticated personal workspace",
+      "status": "passed"
+    },
+    {
+      "name": "real UI upload persists exact bytes and indexes through actual services",
+      "status": "passed"
+    },
+    {
+      "name": "lexical vector and hybrid searches return real indexed upload and source",
+      "status": "passed"
+    },
+    {
+      "name": "human edit creates new immutable version through real UI",
+      "status": "passed"
+    },
+    {
+      "name": "real session create rename and refresh preserve authenticated selection",
+      "status": "passed"
+    },
+    {
+      "name": "cookie session restores in a new tab without JavaScript token persistence",
+      "status": "passed"
+    },
+    {
+      "name": "real session deletion and logout clear session and stay logged out on refresh",
+      "status": "passed"
+    },
+    {
+      "name": "existing real model answer citations and committed approval receipt render in UI",
+      "status": "passed"
+    },
+    {
+      "name": "no browser errors external requests new model POSTs or source changes",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "proxy-live-documents-ready.png",
+    "proxy-live-original-preview.png",
+    "proxy-live-immutable-history.png",
+    "proxy-live-refresh-restored-session.png",
+    "proxy-live-model-fixed-citation.png",
+    "proxy-live-model-approval-receipt.png"
+  ],
+  "source_sha256": {
+    "index.html": "5c299c4aed0e31eeaf5cb879ad12027eebd8a7d2b6915c74522b0062746c477b",
+    "app.js": "316341e12cf005617fbd55d2549a4d3dfbf91a45348b888bb063f601ec233d7d",
+    "core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+    "style.css": "6dd5fffccf2ca22f449c117a472be853c187dda13f3b80cf142bf36d0020b963"
+  },
+  "status": "passed",
+  "finished_at": "2026-10-17T06:33:14.878Z"
+}

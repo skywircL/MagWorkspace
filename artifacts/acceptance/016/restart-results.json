@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "base_url": "http://127.0.0.1:8080",
+  "schema_before": 10,
+  "schema_after": 11,
+  "business_counts_unchanged": true,
+  "public_config": {
+    "max_file_size_bytes": 52428800,
+    "max_file_size_mb": 50
+  },
+  "backup_path": "/Users/skywircl/Documents/ChatGPT/MagWorkspace/.cache/backups/upload-limit-20261017-134226/mysql-before-v11.sql",
+  "checks": [
+    "readyz",
+    "healthz",
+    "embedded frontend",
+    "schema 11",
+    "public config 50 MB",
+    "business row counts preserved"
+  ]
+}

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<properties>
+  <server>
+    <host>0.0.0.0</host>
+    <port>9998</port>
+    <noFork>false</noFork>
+    <taskTimeoutMillis>60000</taskTimeoutMillis>
+    <taskPulseMillis>1000</taskPulseMillis>
+    <maxFiles>1000</maxFiles>
+    <returnStackTrace>false</returnStackTrace>
+    <enableUnsecureFeatures>false</enableUnsecureFeatures>
+    <endpoints>
+      <endpoint>tika</endpoint>
+    </endpoints>
+    <forkedJvmArgs>
+      <arg>-Xms64m</arg>
+      <arg>-Xmx512m</arg>
+      <arg>-Djava.awt.headless=true</arg>
+    </forkedJvmArgs>
+  </server>
+
+  <!-- Only the document formats accepted by the Go parser need parsers here.
+       OCR is disabled; the Go client also forbids embedded extraction. -->
+  <parsers>
+    <parser class="org.apache.tika.parser.pdf.PDFParser">
+      <params>
+        <param name="ocrStrategy" type="string">no_ocr</param>
+        <param name="extractInlineImages" type="bool">false</param>
+      </params>
+    </parser>
+    <parser class="org.apache.tika.parser.microsoft.ooxml.OOXMLParser"/>
+  </parsers>
+
+  <autoDetectParserConfig>
+    <!-- This threshold enables the compression-ratio check; output size is
+         separately bounded by the Go client's writeLimit and byte limits. -->
+    <outputThreshold>10000</outputThreshold>
+    <maximumCompressionRatio>100</maximumCompressionRatio>
+    <maximumDepth>100</maximumDepth>
+    <maximumPackageEntryDepth>10</maximumPackageEntryDepth>
+    <metadataWriteFilterFactory class="org.apache.tika.metadata.writefilter.StandardWriteFilterFactory">
+      <maxKeySize>256</maxKeySize>
+      <maxFieldSize>2097152</maxFieldSize>
+      <maxTotalEstimatedBytes>4194304</maxTotalEstimatedBytes>
+      <maxValuesPerField>100</maxValuesPerField>
+    </metadataWriteFilterFactory>
+  </autoDetectParserConfig>
+</properties>

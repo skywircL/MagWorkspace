@@ -1,0 +1,16 @@
+{
+  "backend_full": {
+    "passed_tests_including_subtests": 858,
+    "skipped_tests": [
+      "TestMinIOLive",
+      "TestParserRealTika"
+    ],
+    "failed": [
+      "TestHTTPCitationAliasesRealHarnessSecondTurnAndCommittedRecovery/stream=false/recovery=true",
+      "TestHTTPCitationAliasesRealHarnessSecondTurnAndCommittedRecovery/stream=true/recovery=true",
+      "TestHTTPCitationAliasesRealHarnessSecondTurnAndCommittedRecovery",
+      "magworkspace/internal/httpapi"
+    ],
+    "exit_code": 1
+  }
+}

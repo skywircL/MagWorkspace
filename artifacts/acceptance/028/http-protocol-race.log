@@ -1,0 +1,182 @@
+=== RUN   TestHTTPCallbackCapabilitiesStayBoundToAuthenticatedRun
+--- PASS: TestHTTPCallbackCapabilitiesStayBoundToAuthenticatedRun (0.01s)
+=== RUN   TestHTTPCallbackCancellationRevokesAndCancelsInflightWork
+=== RUN   TestHTTPCallbackCancellationRevokesAndCancelsInflightWork/false
+=== RUN   TestHTTPCallbackCancellationRevokesAndCancelsInflightWork/true
+--- PASS: TestHTTPCallbackCancellationRevokesAndCancelsInflightWork (0.00s)
+    --- PASS: TestHTTPCallbackCancellationRevokesAndCancelsInflightWork/false (0.00s)
+    --- PASS: TestHTTPCallbackCancellationRevokesAndCancelsInflightWork/true (0.00s)
+=== RUN   TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure
+=== RUN   TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/missing
+=== RUN   TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/duplicate
+=== RUN   TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/forged
+=== RUN   TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/unknown_path
+--- PASS: TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure (0.00s)
+    --- PASS: TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/missing (0.00s)
+    --- PASS: TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/duplicate (0.00s)
+    --- PASS: TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/forged (0.00s)
+    --- PASS: TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure/unknown_path (0.00s)
+=== RUN   TestHTTPCallbackConcurrentRunsAndRevocation
+--- PASS: TestHTTPCallbackConcurrentRunsAndRevocation (0.01s)
+=== RUN   TestHTTPHarnessCompletionRevokesAllCallbackCapabilities
+--- PASS: TestHTTPHarnessCompletionRevokesAllCallbackCapabilities (0.00s)
+=== RUN   TestHTTPHarnessJSONRequestContractAndStrictScope
+=== RUN   TestHTTPHarnessJSONRequestContractAndStrictScope/false
+=== RUN   TestHTTPHarnessJSONRequestContractAndStrictScope/true
+--- PASS: TestHTTPHarnessJSONRequestContractAndStrictScope (0.00s)
+    --- PASS: TestHTTPHarnessJSONRequestContractAndStrictScope/false (0.00s)
+    --- PASS: TestHTTPHarnessJSONRequestContractAndStrictScope/true (0.00s)
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_uppercase_host
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/mode
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/header_injection
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_implicit_port
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/unadvertised_wildcard
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/public_HTTP
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/query
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/invalid_port
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/unicode_key
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_path
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_trailing_slash
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/short_key
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/key_with_spaces
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_IPv6
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_zero_padded_port
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/userinfo
+=== RUN   TestHTTPHarnessRejectsInvalidDeploymentConfiguration/fragment
+--- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_uppercase_host (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/mode (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/header_injection (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_implicit_port (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/unadvertised_wildcard (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/public_HTTP (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/query (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/invalid_port (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/unicode_key (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_path (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_trailing_slash (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/short_key (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/key_with_spaces (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_IPv6 (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/callback_zero_padded_port (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/userinfo (0.00s)
+    --- PASS: TestHTTPHarnessRejectsInvalidDeploymentConfiguration/fragment (0.00s)
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/missing_protocol
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/wrong_protocol
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/wrong_content_type
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/duplicate_JSON
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_run
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_session
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_mode
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/invalid_UTF8
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/trailing_JSON
+=== RUN   TestHTTPHarnessRejectsMalformedJSONAndProtocol/oversized_JSON
+--- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol (0.03s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/missing_protocol (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/wrong_protocol (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/wrong_content_type (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/duplicate_JSON (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_run (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_session (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/different_mode (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/invalid_UTF8 (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/trailing_JSON (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedJSONAndProtocol/oversized_JSON (0.02s)
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/301
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/302
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/307
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/308
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/400
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/401
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/403
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/404
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/429
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/500
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/502
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/503
+=== RUN   TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/504
+--- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed (0.01s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/301 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/302 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/307 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/308 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/400 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/401 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/403 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/404 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/429 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/500 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/502 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/503 (0.00s)
+    --- PASS: TestHTTPHarnessServiceErrorsAreRedactedAndRedirectsAreNotFollowed/504 (0.00s)
+=== RUN   TestHTTPHarnessFragmentedSSEAndProvisionalAttempts
+--- PASS: TestHTTPHarnessFragmentedSSEAndProvisionalAttempts (0.01s)
+=== RUN   TestHTTPHarnessRejectsMalformedSSE
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/error_extra_details
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/incomplete_terminal
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/duplicate_terminal
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/unknown_event
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/terminal_before_message
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/cross-session_event
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/duplicate_key
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/event_mismatch
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/invalid_UTF8
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/oversized_total
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/missing_terminal
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/trailing_comment
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/cross-run_event
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/unknown_field
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/oversized_record
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/unknown_error_code
+=== RUN   TestHTTPHarnessRejectsMalformedSSE/cross-run_result
+--- PASS: TestHTTPHarnessRejectsMalformedSSE (0.16s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/error_extra_details (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/incomplete_terminal (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/duplicate_terminal (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/unknown_event (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/terminal_before_message (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/cross-session_event (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/duplicate_key (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/event_mismatch (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/invalid_UTF8 (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/oversized_total (0.10s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/missing_terminal (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/trailing_comment (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/cross-run_event (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/unknown_field (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/oversized_record (0.03s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/unknown_error_code (0.00s)
+    --- PASS: TestHTTPHarnessRejectsMalformedSSE/cross-run_result (0.00s)
+=== RUN   TestHTTPHarnessSSESafeTerminalErrors
+=== RUN   TestHTTPHarnessSSESafeTerminalErrors/agent_failed
+=== RUN   TestHTTPHarnessSSESafeTerminalErrors/agent_unavailable
+--- PASS: TestHTTPHarnessSSESafeTerminalErrors (0.00s)
+    --- PASS: TestHTTPHarnessSSESafeTerminalErrors/agent_failed (0.00s)
+    --- PASS: TestHTTPHarnessSSESafeTerminalErrors/agent_unavailable (0.00s)
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose/timeout_JSON
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose/timeout_SSE
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose/cancel_JSON
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose/cancel_SSE
+=== RUN   TestHTTPHarnessBodyDeadlineCancellationAndClientClose/close_JSON
+--- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose (0.17s)
+    --- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose/timeout_JSON (0.08s)
+    --- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose/timeout_SSE (0.08s)
+    --- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose/cancel_JSON (0.00s)
+    --- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose/cancel_SSE (0.00s)
+    --- PASS: TestHTTPHarnessBodyDeadlineCancellationAndClientClose/close_JSON (0.00s)
+=== RUN   TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts
+=== RUN   TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts/false
+=== RUN   TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts/true
+--- PASS: TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts (0.00s)
+    --- PASS: TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts/false (0.00s)
+    --- PASS: TestHTTPHarnessCallbackFailureCancelsStreamAndRedacts/true (0.00s)
+=== RUN   TestHTTPHarnessRejectsOversizedRequestAndClosedClient
+--- PASS: TestHTTPHarnessRejectsOversizedRequestAndClosedClient (0.04s)
+=== RUN   TestHTTPHarnessNeverReplaysARequestAfterLostResponse
+--- PASS: TestHTTPHarnessNeverReplaysARequestAfterLostResponse (0.00s)
+PASS
+ok  	magworkspace/internal/agent	1.883s

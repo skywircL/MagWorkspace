@@ -1,0 +1,11 @@
+{
+  "status": "passed",
+  "base_url": "http://127.0.0.1:5173",
+  "config": 200,
+  "assets": {
+    "index.html": "9d04bc0a0489b1d1a65ff41af4147d956adc57580737db536d96c0596f1a62c8",
+    "app.js": "c99a20b10a1bd4c7a2d9bfc1de7ddbf326804fa49cbd9bfd3e6856b4c3cbad16",
+    "core.js": "f8b6803b579df4c2d9900d44976fa2c73dcacef34d6e1ec002dd74e9734d8e97",
+    "style.css": "a8add635af91cb676c7c190ad7b1947a776e6738e88a17e667e44e44d785e848"
+  }
+}

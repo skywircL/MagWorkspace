@@ -1,0 +1,9 @@
+{
+  "status": "passed",
+  "checks": [
+    "50 MB displayed from backend configuration",
+    "9 MiB DOCX uploaded via file chooser",
+    "uploaded document became searchable"
+  ],
+  "synthetic_account": true
+}

@@ -1,0 +1,95 @@
+ Image magworkspace-backend Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.50kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 689B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/python:3.13-alpine
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/golang:1.27-alpine
+#4 DONE 3.5s
+
+#3 [internal] load metadata for docker.io/library/python:3.13-alpine
+#3 DONE 3.6s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 85B done
+#5 DONE 0.0s
+
+#6 [build 1/7] FROM docker.io/library/golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
+#6 DONE 0.0s
+
+#7 [stage-1 1/7] FROM docker.io/library/python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 9.87kB 0.0s done
+#8 DONE 0.0s
+
+#9 [build 2/7] WORKDIR /src
+#9 CACHED
+
+#10 [build 3/7] COPY go.mod go.sum ./
+#10 CACHED
+
+#11 [build 4/7] RUN go mod download
+#11 DONE 91.1s
+
+#12 [build 5/7] COPY cmd ./cmd
+#12 DONE 0.0s
+
+#13 [build 6/7] COPY internal ./internal
+#13 DONE 0.1s
+
+#14 [build 7/7] RUN CGO_ENABLED=0 go build -trimpath -o /out/magworkspace ./cmd/server
+#14 DONE 12.2s
+
+#15 [stage-1 2/7] RUN addgroup -S app && adduser -S -G app app
+#15 CACHED
+
+#16 [stage-1 3/7] WORKDIR /app
+#16 CACHED
+
+#17 [stage-1 4/7] COPY --from=build /out/magworkspace /app/magworkspace
+#17 DONE 0.1s
+
+#18 [stage-1 5/7] COPY bridges/magent/requirements.txt /app/bridges/magent/requirements.txt
+#18 DONE 0.0s
+
+#19 [stage-1 6/7] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/requirements.txt
+#19 7.323 Collecting anyio==4.15.1 (from -r /app/bridges/magent/requirements.txt (line 3))
+#19 10.06   Downloading anyio-4.15.1-py3-none-any.whl (132 kB)
+#19 10.41 Collecting certifi==2026.7.22 (from -r /app/bridges/magent/requirements.txt (line 4))
+#19 10.59   Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+#19 10.84 Collecting h11==0.16.0 (from -r /app/bridges/magent/requirements.txt (line 5))
+#19 11.02   Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#19 11.23 Collecting httpcore==1.0.9 (from -r /app/bridges/magent/requirements.txt (line 6))
+#19 11.41   Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#19 11.65 Collecting httpx==0.28.1 (from -r /app/bridges/magent/requirements.txt (line 7))
+#19 11.82   Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#19 12.04 Collecting idna==3.20 (from -r /app/bridges/magent/requirements.txt (line 8))
+#19 12.22   Downloading idna-3.20-py3-none-any.whl (69 kB)
+#19 12.51 Collecting typing-extensions==4.16.0 (from -r /app/bridges/magent/requirements.txt (line 9))
+#19 12.70   Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#19 12.83 Installing collected packages: typing-extensions, idna, h11, certifi, httpcore, anyio, httpx
+#19 13.15 
+#19 13.15 Successfully installed anyio-4.15.1 certifi-2026.7.22 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.20 typing-extensions-4.16.0
+#19 13.15 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#19 DONE 13.2s
+
+#20 [stage-1 7/7] COPY bridges /app/bridges
+#20 DONE 0.0s
+
+#21 exporting to image
+#21 exporting layers 0.1s done
+#21 writing image sha256:e2873856bd38105d8aa3c4d794ac5242c630d343768dc53e79ae938f57385341 done
+#21 naming to docker.io/library/magworkspace-backend done
+#21 DONE 0.1s
+
+#22 resolving provenance for metadata file
+#22 DONE 0.0s
+ Image magworkspace-backend Built 

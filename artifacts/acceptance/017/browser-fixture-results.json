@@ -1,0 +1,93 @@
+{
+  "fixture": true,
+  "scope": "Chromium DOM and HTTP fixture behavior; no real auth, database, Harness, indexing service or model provider",
+  "started_at": "2026-10-17T05:52:31.402Z",
+  "checks": [
+    {
+      "name": "login renders current assets with CSP and synthetic account",
+      "status": "passed"
+    },
+    {
+      "name": "document totals, current index states and malicious title are literal",
+      "status": "passed"
+    },
+    {
+      "name": "upload opens and cancels without a document POST",
+      "status": "passed"
+    },
+    {
+      "name": "content search and clear preserve untrusted text",
+      "status": "passed"
+    },
+    {
+      "name": "raw document preview remains literal text",
+      "status": "passed"
+    },
+    {
+      "name": "workspace switch disables upload for viewer and restores owner",
+      "status": "passed"
+    },
+    {
+      "name": "new session and suggestion fill composer without sending",
+      "status": "passed"
+    },
+    {
+      "name": "rejected message POST preserves draft and never retries",
+      "status": "passed"
+    },
+    {
+      "name": "SSE completion reconciles durable history and clears accepted input",
+      "status": "passed"
+    },
+    {
+      "name": "session rename and confirmed delete update UI and fixture",
+      "status": "passed"
+    },
+    {
+      "name": "suspended approval cannot approve when fixed baseline fails",
+      "status": "passed"
+    },
+    {
+      "name": "older history keeps latest suspended run and approval visible",
+      "status": "passed"
+    },
+    {
+      "name": "full session page and composer remain reachable on laptop height",
+      "status": "passed"
+    },
+    {
+      "name": "mobile documents, search and approval fit viewport",
+      "status": "passed"
+    },
+    {
+      "name": "401 returns to login and clears private DOM content",
+      "status": "passed"
+    },
+    {
+      "name": "no JavaScript errors, external requests or unhandled fixture routes",
+      "status": "passed"
+    }
+  ],
+  "screenshots": [
+    "desktop-login.png",
+    "desktop-documents.png",
+    "desktop-chat.png",
+    "desktop-approval.png",
+    "laptop-chat.png",
+    "mobile-documents.png",
+    "mobile-chat.png"
+  ],
+  "source_sha256": {
+    "index.html": "9bc472ef820e0217c729543db4dafdace74bf8290e4d36c7256fff5a6cf0192d",
+    "app.js": "2d470d666480fc3c1eb3fb0f582d8ba965eb8535961f3a81aa90d84f27de9321",
+    "core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+    "style.css": "0d85d913220452d5bef17a341010fd9895a64a0fa20a66c3b382da4bb1efcccd"
+  },
+  "status": "passed",
+  "finished_at": "2026-10-17T05:52:35.707Z",
+  "request_counts": {
+    "total": 107,
+    "message_posts": 3,
+    "unexpected": 0
+  }
+}

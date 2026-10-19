@@ -1,0 +1,12 @@
+{
+  "backend_full": {
+    "passed_tests_including_subtests": 764,
+    "skipped_tests": [
+      "TestMinIOLive",
+      "TestParserRealTika"
+    ],
+    "failed": [],
+    "exit_code": 0
+  },
+  "vet_build_gofmt": "passed"
+}

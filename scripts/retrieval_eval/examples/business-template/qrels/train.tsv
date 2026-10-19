@@ -1,0 +1,4 @@
+query-id	corpus-id	score
+synthetic-train-1	synthetic-domestic-travel	1
+synthetic-train-1	synthetic-vpn-access	0
+synthetic-train-2	synthetic-vpn-access	1

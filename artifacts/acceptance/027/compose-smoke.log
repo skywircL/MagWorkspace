@@ -1,0 +1,290 @@
+ Image magworkspace-minio:local Building 
+ Image mw-index-test-b7984c7cf5-tika Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.10kB done
+#1 DONE 0.0s
+
+#2 [minio internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.97kB done
+#2 DONE 0.0s
+
+#3 [tika internal] load build definition from Dockerfile
+#3 transferring dockerfile: 948B done
+#3 DONE 0.0s
+
+#4 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#4 DONE 0.0s
+
+#5 [tika internal] load .dockerignore
+#5 transferring context: 2B done
+#5 DONE 0.0s
+
+#6 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#6 DONE 0.0s
+
+#7 [tika internal] load build context
+#7 transferring context: 37B done
+#7 DONE 0.0s
+
+#8 [tika 2/4] WORKDIR /opt/tika
+#8 CACHED
+
+#9 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#9 CACHED
+
+#10 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#10 CACHED
+
+#11 [tika] exporting to image
+#11 exporting layers done
+#11 writing image sha256:0b2056d5a237babd8d7e7001a20c7ff88a7cfec6e72ae2d5362f858a3ef19a62 done
+#11 naming to docker.io/library/mw-index-test-b7984c7cf5-tika done
+#11 DONE 0.0s
+
+#12 [tika] resolving provenance for metadata file
+#12 DONE 0.0s
+
+#13 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#13 ...
+
+#14 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#14 DONE 7.1s
+
+#13 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#13 DONE 7.1s
+
+#15 [minio internal] load .dockerignore
+#15 transferring context: 2B done
+#15 DONE 0.0s
+
+#16 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#16 DONE 0.0s
+
+#17 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#17 DONE 0.0s
+
+#18 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#18 CACHED
+
+#19 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#19 CACHED
+
+#20 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#20 CACHED
+
+#21 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#21 CACHED
+
+#22 [minio build 3/6] WORKDIR /src
+#22 CACHED
+
+#23 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#23 CACHED
+
+#24 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#24 CACHED
+
+#25 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#25 CACHED
+
+#26 [minio stage-1 5/5] WORKDIR /data
+#26 CACHED
+
+#27 [minio] exporting to image
+#27 exporting layers done
+#27 writing image sha256:aa97562991a09fa41c9c8c05bb50751b0b49683be3dd4051ffdabdfca7b08f1b done
+#27 naming to docker.io/library/magworkspace-minio:local done
+#27 DONE 0.0s
+
+#28 [minio] resolving provenance for metadata file
+#28 DONE 0.0s
+ Image magworkspace-minio:local Built 
+ Image mw-index-test-b7984c7cf5-tika Built 
+ Network mw-index-test-b7984c7cf5_default Creating 
+ Volume mw-index-test-b7984c7cf5_minio-data Creating 
+ Volume mw-index-test-b7984c7cf5_mysql-data Creating 
+ Volume mw-index-test-b7984c7cf5_qdrant-data Creating 
+ Volume mw-index-test-b7984c7cf5_qdrant-data Creating 
+ Volume mw-index-test-b7984c7cf5_mysql-data Creating 
+ Volume mw-index-test-b7984c7cf5_minio-data Creating 
+ Network mw-index-test-b7984c7cf5_default Creating 
+ Volume mw-index-test-b7984c7cf5_qdrant-data Created 
+ Volume mw-index-test-b7984c7cf5_qdrant-data Created 
+ Volume mw-index-test-b7984c7cf5_mysql-data Created 
+ Volume mw-index-test-b7984c7cf5_mysql-data Created 
+ Volume mw-index-test-b7984c7cf5_minio-data Created 
+ Volume mw-index-test-b7984c7cf5_minio-data Created 
+ Network mw-index-test-b7984c7cf5_default Created 
+ Network mw-index-test-b7984c7cf5_default Created 
+ Container mw-index-test-b7984c7cf5-tika-1 Creating 
+ Container mw-index-test-b7984c7cf5-ollama-1 Creating 
+ Container mw-index-test-b7984c7cf5-mysql-1 Creating 
+ Container mw-index-test-b7984c7cf5-minio-1 Creating 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Creating 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Created 
+ Container mw-index-test-b7984c7cf5-ollama-1 Created 
+ Container mw-index-test-b7984c7cf5-minio-1 Created 
+ Container mw-index-test-b7984c7cf5-mysql-1 Created 
+ Container mw-index-test-b7984c7cf5-tika-1 Created 
+ Container mw-index-test-b7984c7cf5-minio-1 Starting 
+ Container mw-index-test-b7984c7cf5-mysql-1 Starting 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Starting 
+ Container mw-index-test-b7984c7cf5-ollama-1 Starting 
+ Container mw-index-test-b7984c7cf5-tika-1 Starting 
+ Container mw-index-test-b7984c7cf5-minio-1 Started 
+ Container mw-index-test-b7984c7cf5-mysql-1 Started 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Started 
+ Container mw-index-test-b7984c7cf5-ollama-1 Started 
+ Container mw-index-test-b7984c7cf5-tika-1 Started 
+ Container mw-index-test-b7984c7cf5-minio-1 Waiting 
+ Container mw-index-test-b7984c7cf5-tika-1 Waiting 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Waiting 
+ Container mw-index-test-b7984c7cf5-mysql-1 Waiting 
+ Container mw-index-test-b7984c7cf5-ollama-1 Waiting 
+ Container mw-index-test-b7984c7cf5-qdrant-1 Healthy 
+ Container mw-index-test-b7984c7cf5-ollama-1 Healthy 
+ Container mw-index-test-b7984c7cf5-minio-1 Healthy 
+ Container mw-index-test-b7984c7cf5-tika-1 Healthy 
+ Container mw-index-test-b7984c7cf5-mysql-1 Healthy 
+ Container mw-index-test-b7984c7cf5-ollama-1 Running 
+ Container mw-index-test-b7984c7cf5-ollama-1 Waiting 
+ Container mw-index-test-b7984c7cf5-ollama-1 Healthy 
+ Container mw-index-test-b7984c7cf5-ollama-model-run-770d63dd0347 Creating 
+ Container mw-index-test-b7984c7cf5-ollama-model-run-770d63dd0347 Created 
+ Image magworkspace-minio:local Building 
+ Image mw-index-test-b7984c7cf5-backend Building 
+ Image mw-index-test-b7984c7cf5-tika Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.60kB done
+#1 DONE 0.0s
+
+#2 [minio internal] load build definition from Dockerfile
+#2 transferring dockerfile: 1.97kB done
+#2 DONE 0.0s
+
+#3 [backend internal] load build definition from Dockerfile
+#3 transferring dockerfile: 689B done
+#3 DONE 0.0s
+
+#4 [tika internal] load build definition from Dockerfile
+#4 transferring dockerfile: 948B done
+#4 DONE 0.0s
+
+#5 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#5 DONE 0.0s
+
+#6 [tika internal] load .dockerignore
+#6 transferring context: 2B done
+#6 DONE 0.0s
+
+#7 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#7 DONE 0.0s
+
+#8 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#8 DONE 0.0s
+
+#9 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#9 DONE 0.0s
+
+#10 [minio internal] load .dockerignore
+#10 transferring context: 2B done
+#10 DONE 0.0s
+
+#11 [tika internal] load build context
+#11 transferring context: 37B done
+#11 DONE 0.0s
+
+#12 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#12 CACHED
+
+#13 [tika 2/4] WORKDIR /opt/tika
+#13 CACHED
+
+#14 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#14 CACHED
+
+#15 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#15 DONE 0.0s
+
+#16 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#16 DONE 0.0s
+
+#17 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#17 CACHED
+
+#18 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#18 CACHED
+
+#19 [minio build 3/6] WORKDIR /src
+#19 CACHED
+
+#20 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#20 CACHED
+
+#21 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#21 CACHED
+
+#22 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#22 CACHED
+
+#23 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#23 CACHED
+
+#24 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#24 CACHED
+
+#25 [minio stage-1 5/5] WORKDIR /data
+#25 CACHED
+
+#26 [tika] exporting to image
+#26 exporting layers done
+#26 writing image sha256:0b2056d5a237babd8d7e7001a20c7ff88a7cfec6e72ae2d5362f858a3ef19a62 done
+#26 naming to docker.io/library/mw-index-test-b7984c7cf5-tika done
+#26 DONE 0.0s
+
+#27 [minio] exporting to image
+#27 exporting layers done
+#27 writing image sha256:aa97562991a09fa41c9c8c05bb50751b0b49683be3dd4051ffdabdfca7b08f1b done
+#27 naming to docker.io/library/magworkspace-minio:local done
+#27 DONE 0.0s
+
+#28 [tika] resolving provenance for metadata file
+#28 DONE 0.0s
+
+#29 [minio] resolving provenance for metadata file
+#29 DONE 0.0s
+
+#30 [backend internal] load metadata for docker.io/library/golang:1.27-alpine
+#30 DONE 0.6s
+
+#31 [backend internal] load metadata for docker.io/library/python:3.13-alpine
+#31 DONE 7.2s
+
+#32 [backend internal] load .dockerignore
+#32 transferring context: 85B done
+#32 DONE 0.0s
+
+#33 [backend build 1/7] FROM docker.io/library/golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
+#33 DONE 0.0s
+
+#34 [backend stage-1 1/7] FROM docker.io/library/python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+#34 DONE 0.0s
+
+#35 [backend internal] load build context
+#35 transferring context: 58.53kB done
+#35 DONE 0.0s
+
+#36 [backend build 2/7] WORKDIR /src
+#36 CACHED
+
+#37 [backend build 3/7] COPY go.mod go.sum ./
+#37 DONE 0.0s
+
+#38 [backend build 4/7] RUN go mod download
+#38 CANCELED
+target backend: failed to solve: Canceled: context canceled
+
+
+
+View build details: docker-desktop://dashboard/build/default/default/o87cw00suuqz8br1kkk5cje22
+

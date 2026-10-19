@@ -1,0 +1,356 @@
+ Image mw-eval-50d386420d-tika Building 
+ Image magworkspace-minio:local Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.08kB done
+#1 DONE 0.0s
+
+#2 [tika internal] load build definition from Dockerfile
+#2 transferring dockerfile: 948B 0.0s done
+#2 DONE 0.0s
+
+#3 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#3 DONE 0.0s
+
+#4 [minio internal] load build definition from Dockerfile
+#4 transferring dockerfile: 1.97kB 0.0s done
+#4 DONE 0.1s
+
+#5 [tika internal] load .dockerignore
+#5 transferring context: 2B done
+#5 DONE 0.0s
+
+#6 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#6 ...
+
+#7 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#7 DONE 0.0s
+
+#8 [tika internal] load build context
+#8 transferring context: 37B done
+#8 DONE 0.0s
+
+#9 [tika 2/4] WORKDIR /opt/tika
+#9 CACHED
+
+#10 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#10 CACHED
+
+#11 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#11 CACHED
+
+#12 [tika] exporting to image
+#12 exporting layers done
+#12 writing image sha256:7f4556d6e485c8f07f090aaec4b052a82afa72822c16be5f88f985f9667050fd done
+#12 naming to docker.io/library/mw-eval-50d386420d-tika done
+#12 DONE 0.0s
+
+#13 [tika] resolving provenance for metadata file
+#13 DONE 0.0s
+
+#14 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#14 DONE 4.3s
+
+#6 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#6 DONE 4.7s
+
+#15 [minio internal] load .dockerignore
+#15 transferring context: 2B done
+#15 DONE 0.0s
+
+#16 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#16 DONE 0.0s
+
+#17 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#17 DONE 0.0s
+
+#18 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#18 CACHED
+
+#19 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#19 CACHED
+
+#20 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#20 CACHED
+
+#21 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#21 CACHED
+
+#22 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#22 CACHED
+
+#23 [minio build 3/6] WORKDIR /src
+#23 CACHED
+
+#24 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#24 CACHED
+
+#25 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#25 CACHED
+
+#26 [minio stage-1 5/5] WORKDIR /data
+#26 CACHED
+
+#27 [minio] exporting to image
+#27 exporting layers done
+#27 writing image sha256:d12f9f303d213db45e3591a896b2714df26980edccd812947219ce5f30c478f9 done
+#27 naming to docker.io/library/magworkspace-minio:local done
+#27 DONE 0.0s
+
+#28 [minio] resolving provenance for metadata file
+#28 DONE 0.0s
+ Image mw-eval-50d386420d-tika Built 
+ Image magworkspace-minio:local Built 
+ Container mw-eval-50d386420d-mysql-1 Running 
+ Container mw-eval-50d386420d-tika-1 Running 
+ Container mw-eval-50d386420d-minio-1 Running 
+ Container mw-eval-50d386420d-ollama-1 Running 
+ Container mw-eval-50d386420d-qdrant-1 Running 
+ Container mw-eval-50d386420d-mysql-1 Waiting 
+ Container mw-eval-50d386420d-tika-1 Waiting 
+ Container mw-eval-50d386420d-minio-1 Waiting 
+ Container mw-eval-50d386420d-ollama-1 Waiting 
+ Container mw-eval-50d386420d-qdrant-1 Waiting 
+ Container mw-eval-50d386420d-ollama-1 Healthy 
+ Container mw-eval-50d386420d-mysql-1 Healthy 
+ Container mw-eval-50d386420d-minio-1 Healthy 
+ Container mw-eval-50d386420d-qdrant-1 Healthy 
+ Container mw-eval-50d386420d-tika-1 Healthy 
+ Container mw-eval-50d386420d-ollama-1 Running 
+ Container mw-eval-50d386420d-ollama-1 Waiting 
+ Container mw-eval-50d386420d-ollama-1 Healthy 
+ Container mw-eval-50d386420d-ollama-model-run-85ee27eb454a Creating 
+ Container mw-eval-50d386420d-ollama-model-run-85ee27eb454a Created 
+ Image mw-eval-50d386420d-backend Building 
+ Image mw-eval-50d386420d-tika Building 
+ Image magworkspace-minio:local Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.57kB done
+#1 DONE 0.0s
+
+#2 [backend internal] load build definition from Dockerfile
+#2 transferring dockerfile: 689B 0.0s done
+#2 DONE 0.1s
+
+#3 [minio internal] load build definition from Dockerfile
+#3 transferring dockerfile: 1.97kB done
+#3 DONE 0.1s
+
+#4 [backend internal] load metadata for docker.io/library/golang:1.27-alpine
+#4 ...
+
+#5 [tika internal] load build definition from Dockerfile
+#5 transferring dockerfile: 948B done
+#5 DONE 0.1s
+
+#6 [tika internal] load metadata for docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#6 DONE 0.0s
+
+#7 [tika internal] load .dockerignore
+#7 transferring context: 2B done
+#7 DONE 0.0s
+
+#8 [minio internal] load metadata for docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#8 DONE 0.1s
+
+#9 [tika 1/4] FROM docker.io/library/eclipse-temurin:21-jre@sha256:ccbad9e7cb84c27092b12c40a4143e5733e050db9c3784d84f632dcf423fb2ef
+#9 DONE 0.0s
+
+#10 [minio internal] load metadata for docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#10 DONE 0.1s
+
+#11 [tika internal] load build context
+#11 transferring context: 37B done
+#11 DONE 0.0s
+
+#12 [tika 3/4] RUN curl --fail --show-error --location --retry 3 --proto '=https'        https://downloads.apache.org/tika/3.3.3/tika-server-standard-3.3.3.jar        --output /opt/tika/tika-server.jar     && printf '%s  %s\n'        '5242b1c9d7aa455bdb0fe101304b2c4a274882406f4d054af39cc91eef678aecb7bf31127d8cc692cd5f47a9f602f4840139f9e8e44a708e312b2ba59d1ebe89'        '/opt/tika/tika-server.jar' | sha512sum --check --strict -
+#12 CACHED
+
+#13 [tika 2/4] WORKDIR /opt/tika
+#13 CACHED
+
+#14 [tika 4/4] COPY tika-config.xml /opt/tika/tika-config.xml
+#14 CACHED
+
+#15 [minio internal] load .dockerignore
+#15 transferring context: 2B done
+#15 DONE 0.0s
+
+#16 [minio build 1/6] FROM docker.io/library/golang:1.27.2-alpine3.23@sha256:9e45f0eb4a63ed37ad6e604950407558b7c738e34e015ae77a5d4ad369cde079
+#16 DONE 0.0s
+
+#17 [minio stage-1 1/5] FROM docker.io/library/alpine:3.23.4@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+#17 DONE 0.0s
+
+#18 [minio build 4/6] RUN git init     && git remote add origin https://github.com/minio/minio.git     && git fetch --depth 1 origin 7aac2a2c5b7c882e68c1ce017d8256be2feea27f     && git checkout --detach FETCH_HEAD     && test "$(git rev-parse HEAD)" = '7aac2a2c5b7c882e68c1ce017d8256be2feea27f'
+#18 CACHED
+
+#19 [minio build 5/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     go mod download
+#19 CACHED
+
+#20 [minio build 6/6] RUN --mount=type=cache,id=magworkspace-minio-mod,target=/go/pkg/mod,sharing=locked     --mount=type=cache,id=magworkspace-minio-build,target=/root/.cache/go-build,sharing=locked     go build -tags kqueue -trimpath     -ldflags "$(go run buildscripts/gen-ldflags.go)" -o /out/minio .
+#20 CACHED
+
+#21 [minio build 3/6] WORKDIR /src
+#21 CACHED
+
+#22 [minio stage-1 3/5] COPY --from=build /out/minio /usr/local/bin/minio
+#22 CACHED
+
+#23 [minio stage-1 2/5] RUN apk add --no-cache ca-certificates     && addgroup -S -g 10001 minio     && adduser -S -u 10001 -G minio minio     && mkdir -p /data /home/minio/certs     && chown -R minio:minio /data /home/minio
+#23 CACHED
+
+#24 [minio build 2/6] RUN apk add --no-cache ca-certificates git
+#24 CACHED
+
+#25 [minio stage-1 4/5] COPY --from=build /src/LICENSE /src/CREDITS /licenses/
+#25 CACHED
+
+#26 [minio stage-1 5/5] WORKDIR /data
+#26 CACHED
+
+#27 [tika] exporting to image
+#27 exporting layers done
+#27 writing image sha256:7f4556d6e485c8f07f090aaec4b052a82afa72822c16be5f88f985f9667050fd done
+#27 naming to docker.io/library/mw-eval-50d386420d-tika done
+#27 DONE 0.0s
+
+#28 [minio] exporting to image
+#28 exporting layers done
+#28 writing image sha256:d12f9f303d213db45e3591a896b2714df26980edccd812947219ce5f30c478f9 done
+#28 naming to docker.io/library/magworkspace-minio:local done
+#28 DONE 0.0s
+
+#29 [backend internal] load metadata for docker.io/library/python:3.13-alpine
+#29 ...
+
+#30 [minio] resolving provenance for metadata file
+#30 DONE 0.1s
+
+#31 [tika] resolving provenance for metadata file
+#31 DONE 0.1s
+
+#29 [backend internal] load metadata for docker.io/library/python:3.13-alpine
+#29 ...
+
+#4 [backend internal] load metadata for docker.io/library/golang:1.27-alpine
+#4 DONE 1.0s
+
+#29 [backend internal] load metadata for docker.io/library/python:3.13-alpine
+#29 DONE 6.0s
+
+#32 [backend internal] load .dockerignore
+#32 transferring context: 85B done
+#32 DONE 0.0s
+
+#33 [backend build 1/7] FROM docker.io/library/golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
+#33 DONE 0.0s
+
+#34 [backend stage-1 1/7] FROM docker.io/library/python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+#34 DONE 0.0s
+
+#35 [backend internal] load build context
+#35 transferring context: 64.34kB 0.0s done
+#35 DONE 0.0s
+
+#36 [backend build 2/7] WORKDIR /src
+#36 CACHED
+
+#37 [backend build 3/7] COPY go.mod go.sum ./
+#37 CACHED
+
+#38 [backend build 4/7] RUN go mod download
+#38 CACHED
+
+#39 [backend build 5/7] COPY cmd ./cmd
+#39 DONE 0.1s
+
+#40 [backend build 6/7] COPY internal ./internal
+#40 DONE 0.1s
+
+#41 [backend build 7/7] RUN CGO_ENABLED=0 go build -trimpath -o /out/magworkspace ./cmd/server
+#41 DONE 18.1s
+
+#42 [backend stage-1 2/7] RUN addgroup -S app && adduser -S -G app app
+#42 CACHED
+
+#43 [backend stage-1 3/7] WORKDIR /app
+#43 CACHED
+
+#44 [backend stage-1 4/7] COPY --from=build /out/magworkspace /app/magworkspace
+#44 DONE 0.2s
+
+#45 [backend stage-1 5/7] COPY bridges/magent/requirements.txt /app/bridges/magent/requirements.txt
+#45 DONE 0.1s
+
+#46 [backend stage-1 6/7] RUN python3 -m pip install --no-cache-dir --require-hashes --only-binary=:all:     --target /app/bridges/magent/.deps -r /app/bridges/magent/requirements.txt
+#46 7.878 Collecting anyio==4.15.1 (from -r /app/bridges/magent/requirements.txt (line 3))
+#46 8.673   Downloading anyio-4.15.1-py3-none-any.whl (132 kB)
+#46 10.16 Collecting certifi==2026.7.22 (from -r /app/bridges/magent/requirements.txt (line 4))
+#46 10.56   Downloading certifi-2026.7.22-py3-none-any.whl (136 kB)
+#46 11.26 Collecting h11==0.16.0 (from -r /app/bridges/magent/requirements.txt (line 5))
+#46 11.48   Downloading h11-0.16.0-py3-none-any.whl (37 kB)
+#46 12.58 Collecting httpcore==1.0.9 (from -r /app/bridges/magent/requirements.txt (line 6))
+#46 12.83   Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
+#46 13.94 Collecting httpx==0.28.1 (from -r /app/bridges/magent/requirements.txt (line 7))
+#46 14.16   Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+#46 15.14 Collecting idna==3.20 (from -r /app/bridges/magent/requirements.txt (line 8))
+#46 15.54   Downloading idna-3.20-py3-none-any.whl (69 kB)
+#46 16.45 Collecting typing-extensions==4.16.0 (from -r /app/bridges/magent/requirements.txt (line 9))
+#46 16.70   Downloading typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+#46 17.21 Installing collected packages: typing-extensions, idna, h11, certifi, httpcore, anyio, httpx
+#46 17.75 
+#46 17.76 Successfully installed anyio-4.15.1 certifi-2026.7.22 h11-0.16.0 httpcore-1.0.9 httpx-0.28.1 idna-3.20 typing-extensions-4.16.0
+#46 17.76 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
+#46 DONE 17.9s
+
+#47 [backend stage-1 7/7] COPY bridges /app/bridges
+#47 DONE 0.2s
+
+#48 [backend] exporting to image
+#48 exporting layers
+#48 exporting layers 0.4s done
+#48 writing image sha256:d7f17487ddac303c30642a2b00e6769a804dafea7e87f699a38a4e1eb6aef001 done
+#48 naming to docker.io/library/mw-eval-50d386420d-backend done
+#48 DONE 0.4s
+
+#49 [backend] resolving provenance for metadata file
+#49 DONE 0.0s
+ Image mw-eval-50d386420d-tika Built 
+ Image magworkspace-minio:local Built 
+ Image mw-eval-50d386420d-backend Built 
+ Container mw-eval-50d386420d-minio-1 Running 
+ Container mw-eval-50d386420d-tika-1 Running 
+ Container mw-eval-50d386420d-ollama-1 Running 
+ Container mw-eval-50d386420d-qdrant-1 Running 
+ Container mw-eval-50d386420d-mysql-1 Running 
+ Container mw-eval-50d386420d-backend-1 Recreate 
+ Container mw-eval-50d386420d-backend-1 Recreated 
+ Container mw-eval-50d386420d-ollama-1 Waiting 
+ Container mw-eval-50d386420d-ollama-1 Healthy 
+ Container mw-eval-50d386420d-ollama-model-1 Starting 
+ Container mw-eval-50d386420d-ollama-model-1 Started 
+ Container mw-eval-50d386420d-ollama-model-1 Waiting 
+ Container mw-eval-50d386420d-qdrant-1 Waiting 
+ Container mw-eval-50d386420d-minio-1 Waiting 
+ Container mw-eval-50d386420d-tika-1 Waiting 
+ Container mw-eval-50d386420d-mysql-1 Waiting 
+ Container mw-eval-50d386420d-mysql-1 Healthy 
+ Container mw-eval-50d386420d-minio-1 Healthy 
+ Container mw-eval-50d386420d-ollama-model-1 Exited 
+ Container mw-eval-50d386420d-tika-1 Healthy 
+ Container mw-eval-50d386420d-qdrant-1 Healthy 
+ Container mw-eval-50d386420d-backend-1 Starting 
+ Container mw-eval-50d386420d-backend-1 Started 
+ Container mw-eval-50d386420d-jaeger-1 Running 
+ Container mw-eval-50d386420d-prometheus-1 Running 
+{
+  "project": "mw-eval-50d386420d",
+  "endpoints": {
+    "backend:8080": "http://127.0.0.1:55103",
+    "backend:9091": "http://127.0.0.1:55109",
+    "ollama:11434": "http://127.0.0.1:55102",
+    "qdrant:6333": "http://127.0.0.1:55101",
+    "jaeger:16686": "http://127.0.0.1:55106",
+    "prometheus:9090": "http://127.0.0.1:55107"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "base_url": "http://127.0.0.1:8080",
+  "backup": ".cache/backups/qdrant-cutover-024/before.sql",
+  "active_work_before_restart": 0,
+  "checks": {
+    "/healthz": 200,
+    "/readyz": 200,
+    "/api/v1/config": 200
+  },
+  "assets": {
+    "index.html": {
+      "sha256": "9d04bc0a0489b1d1a65ff41af4147d956adc57580737db536d96c0596f1a62c8",
+      "matches": true
+    },
+    "app.js": {
+      "sha256": "c99a20b10a1bd4c7a2d9bfc1de7ddbf326804fa49cbd9bfd3e6856b4c3cbad16",
+      "matches": true
+    },
+    "core.js": {
+      "sha256": "f8b6803b579df4c2d9900d44976fa2c73dcacef34d6e1ec002dd74e9734d8e97",
+      "matches": true
+    },
+    "style.css": {
+      "sha256": "a8add635af91cb676c7c190ad7b1947a776e6738e88a17e667e44e44d785e848",
+      "matches": true
+    }
+  },
+  "index_job_timeout": "30m",
+  "pdf_reindex": "running_after_timeout_retry",
+  "main_backend": "qdrant_native",
+  "scifact": "background_running",
+  "notifications": false
+}

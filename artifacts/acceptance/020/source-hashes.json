@@ -1,0 +1,12 @@
+{
+  "internal/store/citation_aliases.go": "d839d363d3939d3f59c0f4e2a6de6c6fed181964116a2afd3b906acd976fbd01",
+  "internal/store/citation_aliases_integration_test.go": "b42f6b176c8013279074b81bbd377e86f5150a46ec1f593626f7c4b923df9cbd",
+  "internal/httpapi/evidence.go": "1a69387d4a79e2ef82402a336e2cd2eb533ee3af7d86903de00f662ade77af9c",
+  "internal/httpapi/citation_aliases_harness_integration_test.go": "9f1a6d1c8bc4637c22a7f21e161951800587f51893f3ab0bcdda8272d5320a86",
+  "internal/agent/tools.go": "55928ca12a70ad57e27da83fa40d2a778e0a9321b1eaa0dc05e3524a64144053",
+  "internal/agent/workspace_tools_test.go": "7939ec41e9af4e4914f1f39b87beea1c0be07207a0fcd817b8a5cdcd5ef4a9e2",
+  "internal/observability/telemetry.go": "5ea55f5c7ee8c9191e35041d721678d5f7229bcf5e86154028fd524ab864e8a9",
+  "bridges/magent/bridge.py": "f088c9541facad087325976d2ab29c241aaa275166376d44943563bb6255f480",
+  "bridges/magent/citations.py": "7ac09b68cfca93552266cde19f129357e78088532c45538c5fc42bf76eda75a1",
+  "bridges/magent/persistence.py": "76c258e82ad677bfbf2967ec77257701669616f272f3bce50b91ff37129896f0"
+}

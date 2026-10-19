@@ -1,0 +1,9 @@
+{
+  "backend_targeted": {
+    "passed_tests_including_subtests": 5,
+    "skipped_tests": [],
+    "failed": [],
+    "exit_code": 0
+  },
+  "vet_build_gofmt": "passed"
+}

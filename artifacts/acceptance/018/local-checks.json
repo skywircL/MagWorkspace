@@ -1,0 +1,25 @@
+{
+  "node_core": {
+    "passed": 6,
+    "skipped": 0
+  },
+  "dev_proxy": {
+    "passed": 10,
+    "skipped": 0
+  },
+  "final_static_and_browser_guard": "passed",
+  "entry_build": "passed",
+  "vet": "passed",
+  "gofmt": "passed (no output)",
+  "fixture_browser": 23,
+  "real_browser_direct": 10,
+  "real_browser_proxy": 10,
+  "final_assets_hash_match": true,
+  "independent_review": "two auth response races and default-port proxy issue fixed; regression checks passed",
+  "not_run": [
+    "stress/load tests",
+    "cross-browser compatibility matrix"
+  ],
+  "full_backend_result": "backend-tests.json",
+  "external_services": "infrastructure-results.json (real service tests passed separately)"
+}

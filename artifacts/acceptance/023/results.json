@@ -1,0 +1,26 @@
+{
+  "qdrant_image": "qdrant/qdrant:v1.16.2",
+  "full_go_race": {
+    "packages_passed": 10,
+    "tests_and_subtests_passed": 884,
+    "skipped": [
+      "TestMinIOLive",
+      "TestParserRealTika"
+    ],
+    "failed": 0
+  },
+  "isolated_indexing_stack": "passed, including skipped external tests above",
+  "python_tests": 66,
+  "main_application_migrated": false,
+  "scifact_qdrant_full_run": "not_run",
+  "design": "docs/decisions/017-qdrant-native-retrieval.md",
+  "source_sha256": {
+    "compose.yaml": "5b9a65e5ceb9457497d4f4846f5f6fa2dcd92acb6812803c0849b99c08a45dde",
+    "cmd/server/indexing.go": "8521d1dbf4b13187cf0e7c6a5981b42140281e45eea4b4080d66a3a449fa3961",
+    "internal/indexing/qdrant.go": "bc6e727b651b3c883c3ffd8dfa1dedcb92d6f8688754d4d017219d1f77992a5e",
+    "internal/indexing/service.go": "9b6b0a184c1528326493c781a54d2cdacfa11f08f4880f2830cb11117305cfce",
+    "scripts/run-scifact.py": "44af937363393bef572b2f03a5eded39c08abd37f1f258ff624e4a24ab9ad9c3",
+    "scripts/evaluation-stack.py": "a6328aff753dd61fde6a548bdc42d710528650fa24f0b0439dc2fc65bd816faa",
+    "scripts/test-indexing-stack.sh": "bcf5add11c3102b30fd1496d953ab7dbd68e479bd0430056485183aab70eea2d"
+  }
+}

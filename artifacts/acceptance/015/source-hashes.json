@@ -1,0 +1,9 @@
+{
+  "internal/httpapi/server.go": "1f19f25c1bdbaba5e778994ac2f77f473b76df8549d62ca15ea2532fdfb37aff",
+  "internal/webui/webui.go": "4fea40332c9980fc0199b521457ed71cccdf35bf88fed1e28d8de415057f1283",
+  "internal/webui/assets/app.js": "d29478c56ac14349b2863a54a6957157f6494b75afa73d120977b8c82b8fe9e2",
+  "internal/webui/assets/core.js": "79253f0ce682a11e1fffc1035a0278a456f6918c3f85c8538b13f188c8386c1a",
+  "internal/webui/assets/index.html": "2b9c9838ce3d2357ca1b739a3c13ef79d17d6ac27e7dacbb85086a2067a3d7f3",
+  "internal/webui/assets/style.css": "88ae398717462a6bc19a057241e741acfe9bba073afb1302519babc70cfba8b4",
+  "scripts/smoke-workbench.py": "bf727aa04cc30b736cd31dfe5953b2e85186995a1d78ba91ecfbb7f932ed2b97"
+}

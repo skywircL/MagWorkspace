@@ -1,0 +1,39 @@
+{
+  "status": "passed",
+  "scope": "user-authorized current local backend rebuild; existing volumes preserved",
+  "previous_image": "sha256:3d90e6264b818e2dac6a0b25f959891fbf78e3d190ff71dcbd12d38310d1fb4f",
+  "before": {
+    "users": 1,
+    "workspaces": 1,
+    "documents": 0,
+    "versions": 0,
+    "sessions": 0,
+    "messages": 0,
+    "schema": 11,
+    "running_runs": 0
+  },
+  "after": {
+    "users": 1,
+    "workspaces": 1,
+    "documents": 0,
+    "versions": 0,
+    "sessions": 0,
+    "messages": 0,
+    "schema": 11,
+    "running_runs": 0
+  },
+  "data_counts_preserved": true,
+  "health": {
+    "/healthz": 200,
+    "/readyz": 200,
+    "/api/v1/config": 200
+  },
+  "source_sha256": {
+    "index.html": "5c299c4aed0e31eeaf5cb879ad12027eebd8a7d2b6915c74522b0062746c477b",
+    "app.js": "316341e12cf005617fbd55d2549a4d3dfbf91a45348b888bb063f601ec233d7d",
+    "core.js": "2dfdcbc4de79ccb9dd292025f4439608a76c6b3092d91929a14b4a8de985c661",
+    "style.css": "6dd5fffccf2ca22f449c117a472be853c187dda13f3b80cf142bf36d0020b963"
+  },
+  "browser_refresh_without_cookie": 401,
+  "cross_origin_refresh": 403
+}

@@ -1,0 +1,71 @@
+ Image magworkspace-backend Building 
+#1 [internal] load local bake definitions
+#1 reading from stdin 1.50kB done
+#1 DONE 0.0s
+
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 689B done
+#2 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/python:3.13-alpine
+#3 ...
+
+#4 [internal] load metadata for docker.io/library/golang:1.27-alpine
+#4 DONE 2.9s
+
+#3 [internal] load metadata for docker.io/library/python:3.13-alpine
+#3 DONE 3.0s
+
+#5 [internal] load .dockerignore
+#5 transferring context: 85B done
+#5 DONE 0.0s
+
+#6 [build 1/7] FROM docker.io/library/golang:1.27-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d
+#6 DONE 0.0s
+
+#7 [stage-1 1/7] FROM docker.io/library/python:3.13-alpine@sha256:2d9aefe2fef018a7eb2c13064c89c71929800fd2e5dccdbf52ea5da5bb8d929a
+#7 DONE 0.0s
+
+#8 [internal] load build context
+#8 transferring context: 136.38kB 0.0s done
+#8 DONE 0.0s
+
+#9 [build 2/7] WORKDIR /src
+#9 CACHED
+
+#10 [build 3/7] COPY go.mod go.sum ./
+#10 DONE 0.0s
+
+#11 [build 4/7] RUN go mod download
+#11 65.50 go: github.com/klauspost/compress@v1.19.2: read "https://proxy.golang.org/github.com/klauspost/compress/@v/v1.19.2.zip": unexpected EOF
+#11 65.50 go: golang.org/x/net@v0.60.0: read "https://proxy.golang.org/golang.org/x/net/@v/v0.60.0.zip": unexpected EOF
+#11 65.50 go: golang.org/x/text@v0.42.0: read "https://proxy.golang.org/golang.org/x/text/@v/v0.42.0.zip": unexpected EOF
+#11 ERROR: process "/bin/sh -c go mod download" did not complete successfully: exit code: 1
+------
+ > [build 4/7] RUN go mod download:
+65.50 go: github.com/klauspost/compress@v1.19.2: read "https://proxy.golang.org/github.com/klauspost/compress/@v/v1.19.2.zip": unexpected EOF
+65.50 go: golang.org/x/net@v0.60.0: read "https://proxy.golang.org/golang.org/x/net/@v/v0.60.0.zip": unexpected EOF
+65.50 go: golang.org/x/text@v0.42.0: read "https://proxy.golang.org/golang.org/x/text/@v/v0.42.0.zip": unexpected EOF
+------
+Dockerfile:4
+
+--------------------
+
+   2 |     WORKDIR /src
+
+   3 |     COPY go.mod go.sum ./
+
+   4 | >>> RUN go mod download
+
+   5 |     COPY cmd ./cmd
+
+   6 |     COPY internal ./internal
+
+--------------------
+
+failed to solve: process "/bin/sh -c go mod download" did not complete successfully: exit code: 1
+
+
+
+View build details: docker-desktop://dashboard/build/default/default/k7vcs4wpvwd9e0aahdtnii6zu
+

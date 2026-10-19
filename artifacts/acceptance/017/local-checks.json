@@ -1,0 +1,29 @@
+{
+  "node_core": {
+    "command": "node --test scripts/test-webui.mjs",
+    "passed": 6,
+    "skipped": 0
+  },
+  "dev_proxy": {
+    "command": "python3 -m unittest scripts.test_dev_webui -v",
+    "passed": 8,
+    "skipped": 0
+  },
+  "final_static_api": {
+    "command": "go test ./internal/webui ./internal/httpapi -run 'TestEmbeddedClient|TestHTTPWebUIAndAPIBoundary' -count=1",
+    "passed": 2,
+    "skipped": 0
+  },
+  "build": "passed (temporary output /private/tmp/magworkspace-webui017)",
+  "vet": "passed",
+  "gofmt": "passed (no output)",
+  "js_syntax": "passed",
+  "real_backend_config_proxy": "HTTP 200 at 127.0.0.1:5173/api/v1/config",
+  "browser_final_assets_match": true,
+  "not_run": [
+    "paid model",
+    "full infrastructure indexing/upload acceptance",
+    "full backend suite",
+    "stress/cross-browser matrix"
+  ]
+}
