@@ -4,7 +4,7 @@
 
 可观测支持结构化日志、分阶段指标与可选 OpenTelemetry，Docker Jaeger/Prometheus 的入口见[可观测文档](docs/observability.md)。检索评测通过真实上传/索引/检索入口运行，使用完整 SciFact 和统一业务集格式，支持断点恢复、逐query结果与配对比较；命令和统计口径见[检索评测](docs/retrieval-evaluation.md)，实际完成状态见[迭代009](docs/iterations/009-evaluation-observability.md)。
 
-个人长期记忆保存于 MySQL，按用户与 Workspace 隔离，跨 Session 和服务重启生效；支持显式保存、主题替代与带墓碑的忘记，模型注入前回查当前权威状态。接口见[个人记忆 API](docs/api.md#个人长期记忆)。
+个人长期记忆保存于 MySQL，按用户与 Workspace 隔离，跨 Session 和服务重启生效。成功对话后由后台自动提取用户陈述；聊天中的“请记住：…”直接进入保存流程，不调用提取模型。侧栏「个人记忆」支持纠正、开启/关闭、查看历史、导出和清空，无需手动新增。回答下方可查看记忆处理状态；自动提取使用现有 Harness 模型并产生额外调用，召回本身不调用模型。资料与偏好作为有界背景，事实与事项按当前问题召回，模型注入前回查当前权威状态。接口及遗忘边界见[个人记忆 API](docs/api.md#个人长期记忆)。
 
 消息接口支持 SSE：添加 `Accept: text/event-stream` 可接收 Harness 原生文本增量；默认仍返回 JSON。实现与验证记录见 [迭代 002](docs/iterations/002-sse.md)。
 
@@ -116,7 +116,7 @@ live 模式转发上游实际文本增量；demo 仅用于验证流协议，不�
 - [可信引用验收记录](docs/iterations/005-trusted-retrieval.md)
 - [存储与 Agent 边界决策](docs/decisions/001-backend-boundaries.md)
 
-基础工作台与维护流程见[迭代017](docs/iterations/017-web-workbench.md)，最新真实后端联调及刷新登录恢复见[迭代018](docs/iterations/018-real-web-session.md)，此前真实全链路验收见[迭代015](docs/iterations/015-minimal-web-live.md)。当前前端不含成员管理、长期记忆管理、PDF 内嵌预览及文档范围选择；这些已有后端能力可继续通过 API 使用（PDF 使用下载）。SSO / 邮件验证尚未实现。对外发布前仍需 HTTPS、备份恢复和部署策略；本地默认只监听回环地址。
+基础工作台与维护流程见[迭代017](docs/iterations/017-web-workbench.md)，最新真实后端联调及刷新登录恢复见[迭代018](docs/iterations/018-real-web-session.md)，此前真实全链路验收见[迭代015](docs/iterations/015-minimal-web-live.md)。当前前端不含成员管理、PDF 内嵌预览及文档范围选择；这些已有后端能力可继续通过 API 使用（PDF 使用下载）。SSO / 邮件验证尚未实现。对外发布前仍需 HTTPS、备份恢复和部署策略；本地默认只监听回环地址。
 
 
 ### Redis
