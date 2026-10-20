@@ -1,8 +1,12 @@
 package domain
 
-// Memory is an explicit personal statement, independent of Session history.
+import "time"
+
+// Memory is a personal statement, independent of Session history.
 // Timestamps use Unix seconds to match the Harness MemoryItem contract.
 type Memory struct {
+	Origin          string   `json:"origin"`
+	SourceRunID     string   `json:"source_run_id"`
 	ID              string   `json:"id"`
 	Kind            string   `json:"kind"`
 	Content         string   `json:"content"`
@@ -25,4 +29,38 @@ type CreateMemory struct {
 	Importance      int
 	ExpiresAt       *float64
 	SourceSessionID string
+}
+
+type MemorySettings struct {
+	Enabled bool `json:"enabled"`
+}
+
+// MemoryCandidate contains no identity or persistence fields from the model.
+type MemoryCandidate struct {
+	Kind       string `json:"kind"`
+	Content    string `json:"content"`
+	Topic      string `json:"topic"`
+	Importance int    `json:"importance"`
+	Evidence   string `json:"evidence"`
+}
+
+type MemoryCaptureJob struct {
+	ID          string
+	RunID       string
+	UserID      string
+	WorkspaceID string
+	SessionID   string
+	Query       string
+	Mode        string
+	Explicit    *MemoryCandidate
+	Attempt     int
+	Generation  uint64
+	Epoch       uint64
+	CreatedAt   time.Time
+}
+
+type MemoryCaptureStatus struct {
+	Status     string `json:"status"`
+	SavedCount int    `json:"saved_count"`
+	ErrorCode  string `json:"error_code,omitempty"`
 }

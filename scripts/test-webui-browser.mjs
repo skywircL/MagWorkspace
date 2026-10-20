@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const output = path.join(root, "artifacts/acceptance/022");
+const output = path.join(root, "artifacts/acceptance/030/webui-regression");
 const assets = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
@@ -230,6 +230,9 @@ async function handle(request, response) {
           if (content === "请求应当被拒绝并保留草稿") { failure(response, 409, "conflict"); return; }
           assert.equal(request.headers.accept, "text/event-stream");
           await streamMessage(response, sessionID, content); return;
+        }
+        if (/^\/runs\/[^/]+\/memory$/.test(resource) && method === "GET") {
+          json(response, { status: "not_scheduled", saved_count: 0 }); return;
         }
         const sourceMatch = /^\/runs\/([^/]+)\/(citations|evidence\/[^/]+)$/.exec(resource);
         if (sourceMatch && method === "GET") {

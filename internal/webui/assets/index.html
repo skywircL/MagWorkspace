@@ -62,6 +62,7 @@
           <p class="nav-caption">工作台</p>
           <button id="nav-docs" class="active"><span class="nav-icon" aria-hidden="true">▤</span>文档知识库<span class="nav-arrow" aria-hidden="true">›</span></button>
           <button id="nav-chat"><span class="nav-icon" aria-hidden="true">◷</span>Agent 会话<span class="nav-arrow" aria-hidden="true">›</span></button>
+          <button id="nav-memory"><span class="nav-icon" aria-hidden="true">◇</span>个人记忆<span class="nav-arrow" aria-hidden="true">›</span></button>
         </nav>
         <div class="sidebar-tip"><span class="tip-symbol" aria-hidden="true">✦</span><p>从资料到答案</p><small>上传文档，让每一次提问<br />都能找到可信的依据。</small></div>
         <div class="side-bottom">
@@ -95,6 +96,15 @@
             <div id="doc-pages" class="pager"></div>
           </div>
           <p class="section-note"><span aria-hidden="true">◇</span> 文档在当前工作空间内共享，每次内容更新都会保留独立版本。</p>
+        </section>
+        <section id="memory-view" aria-label="个人记忆" hidden>
+          <div class="knowledge-panel memory-panel">
+            <div class="panel-heading"><div><h2>从对话中积累个人记忆</h2><p class="muted">后台模型会从你在已完成对话中提供的信息提取长期资料、偏好和事项，提取会产生额外的模型调用。记忆仅属于你和当前空间，可跨会话使用。</p><p class="muted">也可以在聊天中说“请记住：…”指定保存内容，此路径不使用模型提取。保存结果以回答下方的记忆状态为准。</p></div></div>
+            <div class="memory-toolbar"><button id="memory-toggle" aria-pressed="false" disabled>读取设置中…</button><span id="memory-setting-note" class="muted"></span></div>
+            <div class="memory-toolbar"><label for="memory-status">显示</label><select id="memory-status"><option value="active">当前有效</option><option value="superseded">已替代</option><option value="archived">已遗忘</option><option value="all">全部（含过期）</option></select><span id="memory-count" class="count">0</span><button id="memory-refresh" class="quiet">刷新</button><button id="memory-export" class="quiet">导出 JSON</button><button id="memory-clear" class="quiet danger">清空记忆</button></div>
+            <div id="memory-list"></div>
+          </div>
+          <p class="section-note">关闭后停止采集和召回，已有记忆仍可纠正、遗忘或导出。遗忘不会删除历史对话，也无法撤回已经发出的模型请求。</p>
         </section>
         <section id="chat-view" aria-label="Agent 会话" hidden>
           <div class="chat-layout">

@@ -2,6 +2,7 @@ import { consumeEvents, changedLines, validateUpload, indexPresentation, renderA
 const $ = (id) => document.getElementById(id);
 const state = {
   auth: null,
+  memoryEnabled: null,
   userID: "",
   spaces: [],
   wid: "",
@@ -177,6 +178,7 @@ async function request(
   if (!r.ok) {
     const error = await errorResponse(r);
     if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
+    error.status = r.status;
     if (r.status === 401 && state.auth && !retried) {
       await renew(true);
       // Only read requests are safe to repeat; never replay a business mutation.
@@ -213,6 +215,9 @@ function pager(id, result, onPage) {
 }
 function syncAvailability() {
   const hasSpace = Boolean(state.wid);
+  for (const id of ["memory-refresh", "memory-export", "memory-clear", "memory-status"])
+    $(id).disabled = !hasSpace;
+  $("memory-toggle").disabled = !hasSpace || state.memoryEnabled === null;
   $("show-upload").disabled = !hasSpace || !writable();
   $("upload-form").querySelectorAll("input,button").forEach((e) => {
     e.disabled = !hasSpace || !writable();
@@ -237,18 +242,20 @@ function syncAvailability() {
 }
 function showView(view) {
   $("shell").classList.toggle("chat-mode", view === "chat");
-  $("docs-view").hidden = view !== "docs";
-  $("chat-view").hidden = view !== "chat";
-  $("page-title").textContent = view === "docs" ? "文档知识库" : "Agent 会话";
-  $("nav-docs").classList.toggle("active", view === "docs");
-  $("nav-chat").classList.toggle("active", view === "chat");
-  $("nav-docs").setAttribute("aria-current", view === "docs" ? "page" : "false");
-  $("nav-chat").setAttribute("aria-current", view === "chat" ? "page" : "false");
-  $("page-description").textContent = view === "docs"
-    ? "让资料井然有序，让每个答案有据可循。"
-    : "检索知识、追溯来源，与 Agent 一起完成工作。";
-  history.replaceState(null, "", view === "chat" ? "#chat" : "#docs");
+  for (const name of ["docs", "chat", "memory"]) {
+    $(name + "-view").hidden = view !== name;
+    $("nav-" + name).classList.toggle("active", view === name);
+    $("nav-" + name).setAttribute("aria-current", view === name ? "page" : "false");
+  }
+  $("page-title").textContent = { docs: "文档知识库", chat: "Agent 会话", memory: "个人记忆" }[view];
+  $("page-description").textContent = {
+    docs: "让资料井然有序，让每个答案有据可循。",
+    chat: "检索知识、追溯来源，与 Agent 一起完成工作。",
+    memory: "管理你的资料、偏好与长期事项，让后续对话更贴合你。",
+  }[view];
+  history.replaceState(null, "", "#" + view);
 }
+
 function showDetail(title) {
   $("detail").classList.remove("source-drawer");
   $("detail-title").textContent = title;
@@ -312,10 +319,11 @@ function resetAuth() {
   try { sessionStorage.removeItem("magworkspace.navigation"); } catch {}
   $("auth-restoring").hidden = true;
   state.spaces = [];
+  state.memoryEnabled = null;
   state.wid = state.sid = state.rid = state.runStatus = "";
   $("shell").hidden = true;
   $("auth").hidden = false;
-  for (const id of ["messages", "prompt", "run-state", "draft", "documents", "sessions", "search-results", "detail-body", "identity", "workspace"])
+  for (const id of ["messages", "prompt", "run-state", "draft", "documents", "sessions", "search-results", "detail-body", "identity", "workspace", "memory-list"])
     $(id).replaceChildren();
   $("query").value = "";
   $("search-form").reset();
@@ -350,6 +358,12 @@ async function loadSpaces() {
   $("workspace-name").textContent = state.spaces.find((w) => w.id === state.wid)?.name || "工作空间";
 }
 async function switchSpace() {
+  state.memoryEnabled = null;
+  $("memory-list").replaceChildren();
+  $("memory-count").textContent = "0";
+  $("memory-status").value = "active";
+  $("memory-toggle").textContent = "读取设置中…";
+  $("memory-setting-note").textContent = "";
   state.sid = "";
   state.rid = "";
   state.docPage = state.sessionPage = state.messagePage = 1;
@@ -368,6 +382,7 @@ async function switchSpace() {
   if (state.wid) {
     await loadDocs();
     await loadSessions();
+    if (!$("memory-view").hidden) await loadMemories();
   } else {
     empty($("documents"), "创建一个空间，开始收藏资料。");
     $("sessions").replaceChildren();
@@ -380,7 +395,7 @@ function rememberNavigation() {
   try {
     sessionStorage.setItem("magworkspace.navigation", JSON.stringify({
       userID: state.userID, wid: state.wid, sid: state.sid,
-      view: $("chat-view").hidden ? "docs" : "chat",
+      view: !$("memory-view").hidden ? "memory" : $("chat-view").hidden ? "docs" : "chat",
     }));
   } catch { /* Browser storage restrictions do not prevent using the workspace. */ }
 }
@@ -402,7 +417,8 @@ async function enterWorkspace() {
   $("auth-restoring").hidden = true;
   $("auth").hidden = true;
   $("shell").hidden = false;
-  showView(saved?.view === "chat" || (!saved && location.hash === "#chat") ? "chat" : "docs");
+  const view = saved?.view || location.hash.slice(1);
+  showView(["chat", "memory"].includes(view) ? view : "docs");
   await switchSpace();
   if (saved?.sid && saved.wid === state.wid) {
     try {
@@ -490,6 +506,87 @@ bind("nav-chat", async () => {
   await loadSessions();
   if (state.sid) await loadMessages();
 });
+bind("nav-memory", async () => { showView("memory"); await loadMemories(); });
+bind("memory-refresh", loadMemories);
+$("memory-status").addEventListener("change", () => act(loadMemories));
+bind("memory-toggle", async () => {
+  await api(wp() + "/memory-settings", "PUT", { enabled: !state.memoryEnabled });
+  await loadMemories();
+});
+bind("memory-export", () => download(wp() + "/memories/export", "personal-memories.json"));
+bind("memory-clear", async () => {
+  if (!confirm("忘记当前空间中你的全部记忆？内容将不再用于召回，遗忘记录会保留，且不能重新添加相同内容。历史对话不会删除。")) return;
+  await api(wp() + "/memories", "DELETE", { confirm: true });
+  await loadMemories();
+  note("已忘记当前空间中的全部个人记忆。");
+});
+
+const memoryKinds = { profile: "个人资料", preference: "表达偏好", fact: "稳定事实", task: "长期事项" };
+const memoryOrigins = { manual: "手动纠正或历史保存", explicit: "聊天明确保存", automatic: "对话自动提取" };
+async function loadMemories() {
+  if (!state.wid) return;
+  const base = wp(), status = $("memory-status").value;
+  state.memoryEnabled = null;
+  $("memory-list").replaceChildren();
+  $("memory-count").textContent = "0";
+  const [settings, items] = await Promise.all([
+    api(base + "/memory-settings"), api(base + "/memories?status=" + enc(status)),
+  ]);
+  if (base !== wp()) return;
+  state.memoryEnabled = settings.enabled;
+  $("memory-toggle").textContent = settings.enabled ? "记忆已开启 · 点击关闭" : "记忆已关闭 · 点击开启";
+  $("memory-toggle").setAttribute("aria-pressed", String(settings.enabled));
+  $("memory-setting-note").textContent = settings.enabled ? "已开启对话采集和召回；后台保存可能稍有延迟" : "已停止采集和召回；仍可纠正、遗忘与导出";
+  $("memory-count").textContent = String(items.length);
+  if (!items.length) { empty($("memory-list"), "暂无此类记忆。开启后，完成对话会触发后台提取；也可以在聊天中说“请记住：…”。"); return; }
+  for (const item of items) {
+    const row = node("article", undefined, "memory-row"), body = node("div", undefined, "memory-copy");
+    const meta = node("div", undefined, "memory-meta");
+    meta.append(node("small", memoryKinds[item.kind] || item.kind), node("span", memoryOrigins[item.origin] || "历史保存", "memory-origin"));
+    body.append(meta, node("p", item.content, "memory-content"));
+    body.append(node("small", [item.topic && "主题：" + item.topic, "重要度 " + item.importance, item.expires_at && "有效至 " + new Date(item.expires_at * 1000).toLocaleString(), "使用 " + item.use_count + " 次"].filter(Boolean).join(" · ")));
+    const actions = node("div", undefined, "memory-actions");
+    if (item.status === "active") actions.append(button("纠正", () => memoryEditor(item), "small quiet"));
+    if (item.status !== "archived") actions.append(button("遗忘", async () => {
+      if (!confirm("遗忘这条记忆及相同内容的副本？相同内容将不能重新添加。")) return;
+      await api(base + "/memories/" + enc(item.id), "DELETE"); await loadMemories();
+    }, "small quiet danger"));
+    row.append(body, actions); $("memory-list").append(row);
+  }
+}
+function memoryEditor(item) {
+  if (!item || item.status !== "active") return;
+  const base = wp(), body = showDetail("纠正个人记忆"), formNode = node("form");
+  const fields = {};
+  const field = (name, title, input) => {
+    const label = node("label", title); input.name = name; fields[name] = input; label.append(input); formNode.append(label); return input;
+  };
+  const kind = node("select");
+  for (const [value, text] of Object.entries(memoryKinds)) { const option = node("option", text); option.value = value; kind.append(option); }
+  kind.value = item.kind; field("kind", "类别", kind);
+  const content = field("content", "记忆内容（最多 500 字）", node("textarea")); content.rows = 4; content.required = true; content.maxLength = 500; content.value = item.content;
+  const topic = field("topic", "主题（可选，同主题新内容替代旧记忆）", node("input")); topic.maxLength = 500; topic.value = item.topic || "";
+  const importance = field("importance", "重要度（1–5）", node("input")); importance.type = "number"; importance.min = "1"; importance.max = "5"; importance.required = true; importance.value = String(item.importance);
+  const expiry = field("expiry", "到期时间（可选，使用本地时间）", node("input")); expiry.type = "datetime-local";
+  if (item.expires_at) { const d = new Date(item.expires_at * 1000); expiry.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
+  formNode.append(node("p", "纠正不准确或已变化的内容，修改会保留替代历史。记忆不会授予文档访问权限。", "muted"));
+  const save = node("button", "保存纠正", "primary"); save.type = "submit"; formNode.append(save);
+  formNode.addEventListener("submit", (event) => {
+    event.preventDefault();
+    act(async () => {
+      if (base !== wp()) throw Error("工作空间已变化，请重新打开记忆。");
+      const expires = expiry.value ? new Date(expiry.value).getTime() / 1000 : null;
+      if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now() / 1000)) throw Error("到期时间必须晚于现在。");
+      await api(base + "/memories/" + enc(item.id), "PUT", {
+        kind: kind.value, content: content.value, topic: topic.value,
+        importance: Number(importance.value), expires_at: expires,
+        ...(item.source_session_id ? { source_session_id: item.source_session_id } : {}),
+      });
+      $("detail").close(); await loadMemories(); note("个人记忆已保存。");
+    });
+  });
+  body.append(formNode);
+}
 bind("close-detail", () => $("detail").close());
 async function loadDocs() {
   if (!state.wid) return;
@@ -857,6 +954,41 @@ function scrollConversation() {
 }
 document.querySelector(".conversation-scroll").addEventListener("scroll", updateScrollButton, { passive: true });
 $("jump-latest").addEventListener("click", scrollConversation);
+function runMemoryStatus(runID) {
+  const box = node("p", undefined, "message-memory");
+  box.hidden = true;
+  box.setAttribute("aria-live", "polite");
+  const base = sp(), epoch = authEpoch;
+  const current = () => epoch === authEpoch && base === sp() && box.isConnected;
+  const refresh = async () => {
+    try {
+      const result = await api(base + "/runs/" + enc(runID) + "/memory");
+      if (!current()) return;
+      const pending = ["waiting", "queued", "running"].includes(result.status);
+      const count = Number.isInteger(result.saved_count) && result.saved_count > 0 ? result.saved_count : 0;
+      const labels = {
+        waiting: "记忆等待处理", queued: "记忆已排队", running: "正在整理本轮记忆",
+        done: count ? `已保存 ${count} 条记忆` : "本轮未新增长期记忆",
+        failed: "记忆处理失败，回答已保留", cancelled: "本轮记忆采集已取消",
+      };
+      if (!labels[result.status]) { box.hidden = true; return; }
+      box.replaceChildren(node("span", labels[result.status]));
+      if (pending) box.append(button("刷新记忆状态", refresh, "text-button"));
+      if (result.status === "done" && count) box.append(button("查看个人记忆", async () => {
+        showView("memory"); await loadMemories();
+      }, "text-button"));
+      box.hidden = false;
+    } catch (error) {
+      if (!current()) return;
+      if (error.status === 404) { box.hidden = true; return; }
+      box.replaceChildren(node("span", "暂时无法读取记忆状态"), button("刷新记忆状态", refresh, "text-button"));
+      box.hidden = false;
+    }
+  };
+  // One read per rendered answer. Manual refresh avoids polling after navigation.
+  void refresh();
+  return box;
+}
 function messageCard(m) {
   const assistant = m.role === "assistant";
   const card = node("article", undefined, "message " + (assistant ? "assistant" : "user"));
@@ -878,6 +1010,7 @@ function messageCard(m) {
       note("回答已复制");
     }, "text-button"), button(count ? `查看引用 · ${count}` : "查看引用", () => showCitations(m.run_id, "", references), "text-button"));
     card.append(actions);
+    if (m.status === "completed" && m.run_id) card.append(runMemoryStatus(m.run_id));
   } else content.textContent = m.content;
   return card;
 }

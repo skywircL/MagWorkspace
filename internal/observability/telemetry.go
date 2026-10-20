@@ -227,7 +227,7 @@ func (t *Telemetry) ObserveCount(operation, outcome string, n int) {
 
 func normalizeOperation(operation string) string {
 	switch operation {
-	case "redis.dispatch", "redis.events", "retrieval.search", "retrieval.lexical", "retrieval.vector", "retrieval.merge", "retrieval.filter", "retrieval.hydrate", "retrieval.embed", "retrieval.scope", "retrieval.resolve",
+	case "memory.dispatch", "memory.capture", "memory.extract", "redis.dispatch", "redis.events", "retrieval.search", "retrieval.lexical", "retrieval.vector", "retrieval.merge", "retrieval.filter", "retrieval.hydrate", "retrieval.embed", "retrieval.scope", "retrieval.resolve",
 		"index.process", "index.parse", "index.chunk", "index.embed", "index.write", "index.publish", "agent.run", "agent.json", "agent.sse", "run.finish",
 		"tool.create_document", "tool.update_document", "tool.search_knowledge", "tool.read_document", "tool.list_documents", "tool.search_conversations", "tool.ask_user", "tool.restore_evidence", "tool.resolve_citation_aliases",
 		"prompt.suspend", "prompt.resume", "prompt.cancel", "object.cleanup", "object.get", "object.put", "object.delete":

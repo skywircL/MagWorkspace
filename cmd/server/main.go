@@ -13,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"magworkspace/internal/agent"
 	"magworkspace/internal/blob"
 	"magworkspace/internal/domain"
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
+	"magworkspace/internal/memorycapture"
 	"magworkspace/internal/redisstate"
 	"magworkspace/internal/store"
 )
@@ -122,6 +124,10 @@ func run() error {
 	} else {
 		close(workersDone)
 	}
+	memoryDone := make(chan struct{})
+	extractor, _ := client.(agent.MemoryExtractor)
+	memories := memorycapture.NewService(db, extractor, memorycapture.Options{Redis: redisClient, Telemetry: telemetry})
+	go func() { defer close(memoryDone); memories.Run(workerCtx) }()
 	objectsDone := make(chan struct{})
 	go func() {
 		defer close(objectsDone)
@@ -143,6 +149,11 @@ func run() error {
 	}()
 	defer func() {
 		cancelWorkers()
+		select {
+		case <-memoryDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("memory worker shutdown deadline exceeded")
+		}
 		select {
 		case <-objectsDone:
 		case <-time.After(5 * time.Second):

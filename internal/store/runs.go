@@ -85,6 +85,9 @@ func (s *Store) BeginRun(ctx context.Context, userID, workspaceID, sessionID, qu
 		if _, err = tx.ExecContext(ctx, `INSERT INTO messages(id,session_id,run_id,role,content) VALUES(?,?,?,'user',?)`, messageID, sessionID, runID, query); err != nil {
 			return err
 		}
+		if err := beginMemoryCaptureTx(ctx, tx, userID, workspaceID, sessionID, runID, messageID); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=UTC_TIMESTAMP(6) WHERE id=? AND workspace_id=? AND user_id=?`, sessionID, workspaceID, userID)
 		return err
 	})
@@ -153,6 +156,9 @@ func (s *Store) FinishRun(ctx context.Context, userID, workspaceID, sessionID, r
 		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id,session_id,run_id,role,content) VALUES(?,?,?,'assistant',?)`, id, sessionID, runID, answer); err != nil {
 			return err
 		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memory_capture_jobs SET status='queued',error_code='',updated_at=UTC_TIMESTAMP(6) WHERE run_id=? AND (status='waiting' OR (status='cancelled' AND error_code='run_failed'))`, runID); err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=UTC_TIMESTAMP(6) WHERE id=? AND workspace_id=? AND user_id=?`, sessionID, workspaceID, userID)
 		return err
 	})
@@ -183,6 +189,9 @@ func (s *Store) FailRun(ctx context.Context, userID, workspaceID, sessionID, run
 			return domain.ErrConflict
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE run_prompts SET status='failed' WHERE run_id=? AND status='resuming'`, runID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE memory_capture_jobs SET status='cancelled',error_code='run_failed',updated_at=UTC_TIMESTAMP(6) WHERE run_id=? AND status='waiting'`, runID); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE runs SET status='failed',error_code=?,finished_at=UTC_TIMESTAMP(6) WHERE id=?`, code, runID)

@@ -229,6 +229,11 @@ func (s *Store) changeMember(ctx context.Context, actorID, workspaceID, targetUs
 			return domain.ErrConflict
 		}
 		if remove {
+			// Revocation invalidates in-flight capture even if membership is later
+			// restored before its model response arrives.
+			if err = invalidateMemoryCapturesTx(ctx, tx, targetUserID, workspaceID); err != nil {
+				return err
+			}
 			_, err = tx.ExecContext(ctx, `DELETE FROM workspace_members WHERE workspace_id=? AND user_id=?`, workspaceID, targetUserID)
 		} else {
 			_, err = tx.ExecContext(ctx, `UPDATE workspace_members SET role=? WHERE workspace_id=? AND user_id=?`, next, workspaceID, targetUserID)

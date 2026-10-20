@@ -1,7 +1,7 @@
 """Personal memory read transport; MySQL and current authority remain in Go.
 
-Only explicit user statements are stored. A source session is audit metadata,
-not a channel to learn document content or copy historical messages.
+Go owns capture from user messages and the metadata describing its source.
+Source metadata is not a channel to copy document or assistant content.
 """
 from __future__ import annotations
 
@@ -49,12 +49,18 @@ class RemoteMemoryStore:
     def _items(values):
         from magent_harness.memory import MemoryItem, MemoryKind, MemoryStatus
         fields = {"id", "kind", "content", "topic", "normalized_key", "importance", "status", "created_at", "expires_at", "superseded_by", "source_session_id", "use_count", "last_used_at"}
+        metadata = {"origin", "source_run_id", "source_message_id"}
         if not isinstance(values, list) or len(values) > 1000:
             raise ValueError("invalid memory response")
         out, seen = [], set()
         for value in values:
-            if not isinstance(value, dict) or set(value) != fields:
+            if not isinstance(value, dict) or not fields <= set(value) or set(value) - fields - metadata:
                 raise ValueError("invalid memory item")
+            if value.get("origin", "") not in ("", "manual", "explicit", "automatic"):
+                raise ValueError("invalid memory origin")
+            for name in ("source_run_id", "source_message_id"):
+                if name in value and (not isinstance(value[name], str) or (value[name] and not re.fullmatch(r"[0-9a-f]{32}", value[name]))):
+                    raise ValueError("invalid memory source")
             for field in ("id", "content", "topic", "normalized_key", "superseded_by", "source_session_id"):
                 if not isinstance(value[field], str) or len(value[field]) > 1000:
                     raise ValueError("invalid memory text")
@@ -68,7 +74,8 @@ class RemoteMemoryStore:
                     continue
                 if type(item) not in (float, int) or not math.isfinite(item):
                     raise ValueError("invalid memory timestamp")
-            item = dict(value, kind=MemoryKind(value["kind"]), status=MemoryStatus(value["status"]))
+            item = {key: value[key] for key in fields}
+            item.update(kind=MemoryKind(value["kind"]), status=MemoryStatus(value["status"]))
             out.append(MemoryItem(**item))
             seen.add(value["id"])
         return out

@@ -17,7 +17,7 @@ import (
 )
 
 const maxMemories = 1000
-const memoryColumns = `id,kind,content,topic,normalized_key,importance,status,created_at,expires_at,superseded_by,source_session_id,use_count,last_used_at`
+const memoryColumns = `id,kind,content,topic,normalized_key,importance,status,created_at,expires_at,superseded_by,source_session_id,use_count,last_used_at,origin,source_run_id`
 
 var memoryEnvelope = regexp.MustCompile(`(?i)</?[\s\p{Z}\x{000b}\x{0085}\x{001c}-\x{001f}]*memory[^>]*>`)
 
@@ -48,7 +48,7 @@ func memoryFingerprint(kind, content string) string {
 }
 func scanMemory(row rowScanner) (domain.Memory, error) {
 	var v domain.Memory
-	err := row.Scan(&v.ID, &v.Kind, &v.Content, &v.Topic, &v.NormalizedKey, &v.Importance, &v.Status, &v.CreatedAt, &v.ExpiresAt, &v.SupersededBy, &v.SourceSessionID, &v.UseCount, &v.LastUsedAt)
+	err := row.Scan(&v.ID, &v.Kind, &v.Content, &v.Topic, &v.NormalizedKey, &v.Importance, &v.Status, &v.CreatedAt, &v.ExpiresAt, &v.SupersededBy, &v.SourceSessionID, &v.UseCount, &v.LastUsedAt, &v.Origin, &v.SourceRunID)
 	return v, dbError(err)
 }
 func memoryRows(ctx context.Context, tx *sql.Tx, query string, args ...any) ([]domain.Memory, error) {
@@ -76,6 +76,18 @@ func listMemoryTx(ctx context.Context, tx *sql.Tx, uid, wid, status string) ([]d
 }
 
 func (s *Store) CreateMemory(ctx context.Context, uid, wid string, in domain.CreateMemory) (domain.Memory, error) {
+	return s.saveMemory(ctx, uid, wid, "", in)
+}
+
+// UpdateMemory appends a replacement; the original immutable ID is the CAS token.
+func (s *Store) UpdateMemory(ctx context.Context, uid, wid, id string, in domain.CreateMemory) (domain.Memory, error) {
+	if !validHexID(id) {
+		return domain.Memory{}, domain.ErrInvalid
+	}
+	return s.saveMemory(ctx, uid, wid, id, in)
+}
+
+func (s *Store) saveMemory(ctx context.Context, uid, wid, previous string, in domain.CreateMemory) (domain.Memory, error) {
 	var out domain.Memory
 	if !validMemoryKind(in.Kind) || !utf8.ValidString(in.Content) || len(in.Content) > 8000 || !utf8.ValidString(in.Topic) || len(in.Topic) > 8000 || (in.SourceSessionID != "" && !validHexID(in.SourceSessionID)) {
 		return out, domain.ErrInvalid
@@ -93,7 +105,20 @@ func (s *Store) CreateMemory(ctx context.Context, uid, wid string, in domain.Cre
 		if _, err := lockWorkspace(ctx, tx, uid, wid); err != nil {
 			return err
 		}
-		if in.SourceSessionID != "" {
+		if previous != "" {
+			var status, source string
+			if err := tx.QueryRowContext(ctx, `SELECT status,source_session_id FROM user_memories WHERE id=? AND workspace_id=? AND user_id=? FOR UPDATE`, previous, wid, uid).Scan(&status, &source); err != nil {
+				return err
+			}
+			if status != "active" {
+				return domain.ErrConflict
+			}
+			if in.SourceSessionID != "" && in.SourceSessionID != source {
+				return domain.ErrInvalid
+			}
+			in.SourceSessionID = source
+		}
+		if previous == "" && in.SourceSessionID != "" {
 			if _, err := privateSession(ctx, tx, uid, wid, in.SourceSessionID); err != nil {
 				return err
 			}
@@ -112,6 +137,11 @@ func (s *Store) CreateMemory(ctx context.Context, uid, wid string, in domain.Cre
 		if count >= maxMemories {
 			return domain.ErrConflict
 		}
+		if previous != "" {
+			if _, err := tx.ExecContext(ctx, `UPDATE user_memories SET status='superseded',superseded_by=? WHERE id=? AND workspace_id=? AND user_id=?`, id, previous, wid, uid); err != nil {
+				return err
+			}
+		}
 		key := strings.ToLower(in.Topic)
 		// A workspace lock serializes replacements and forget/create races.
 		if key != "" {
@@ -123,12 +153,18 @@ func (s *Store) CreateMemory(ctx context.Context, uid, wid string, in domain.Cre
 		if err != nil {
 			return err
 		}
+		if err := invalidateMemoryCapturesTx(ctx, tx, uid, wid); err != nil {
+			return err
+		}
 		out, err = scanMemory(tx.QueryRowContext(ctx, `SELECT `+memoryColumns+` FROM user_memories WHERE id=? AND workspace_id=? AND user_id=?`, id, wid, uid))
 		return err
 	})
 	return out, err
 }
 func (s *Store) Memories(ctx context.Context, uid, wid, status string) ([]domain.Memory, error) {
+	if status == "all" {
+		return s.ExportMemories(ctx, uid, wid)
+	}
 	out := []domain.Memory{}
 	if status == "" {
 		status = "active"
@@ -159,6 +195,9 @@ func (s *Store) ForgetMemory(ctx context.Context, uid, wid, id string) error {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT IGNORE INTO memory_tombstones(workspace_id,user_id,fingerprint,forgotten_at) VALUES(?,?,?,UNIX_TIMESTAMP(UTC_TIMESTAMP(6)))`, wid, uid, fingerprint); err != nil {
+			return err
+		}
+		if err := invalidateMemoryCapturesTx(ctx, tx, uid, wid); err != nil {
 			return err
 		}
 		// Forget every duplicate, including replacements and older identical IDs.
@@ -197,40 +236,52 @@ func (s *Store) RunMemory(ctx context.Context, uid, wid, sid, rid string, genera
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
 			return err
 		}
+		if operation != "list" && operation != "get_items" && operation != "touch" {
+			return domain.ErrInvalid
+		}
+		enabled, err := memoryEnabledTx(ctx, tx, uid, wid)
+		if err != nil {
+			return err
+		}
+		if !enabled {
+			if operation == "touch" {
+				out = map[string]any{}
+			} else {
+				out = []domain.Memory{}
+			}
+			return nil
+		}
 		switch operation {
 		case "list":
 			items, err := listMemoryTx(ctx, tx, uid, wid, in.Status)
 			out = items
 			return err
 		case "get_items", "touch":
-			items := []domain.Memory{}
-			seen := map[string]bool{}
-			for _, id := range in.ItemIDs {
-				if seen[id] {
-					continue
-				}
-				seen[id] = true
-				// Lookup uses authoritative rows, never the candidate object's status/content.
-				query := ` FROM user_memories m WHERE id=? AND workspace_id=? AND user_id=? AND status='active' AND (expires_at IS NULL OR expires_at>UNIX_TIMESTAMP(UTC_TIMESTAMP(6))) AND NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.workspace_id=m.workspace_id AND t.user_id=m.user_id AND t.fingerprint=m.fingerprint)`
-				if operation == "touch" {
-					_, err := tx.ExecContext(ctx, `UPDATE user_memories m SET use_count=use_count+1,last_used_at=UNIX_TIMESTAMP(UTC_TIMESTAMP(6)) WHERE id=? AND workspace_id=? AND user_id=? AND status='active' AND (expires_at IS NULL OR expires_at>UNIX_TIMESTAMP(UTC_TIMESTAMP(6))) AND NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.workspace_id=m.workspace_id AND t.user_id=m.user_id AND t.fingerprint=m.fingerprint)`, id, wid, uid)
-					if err != nil {
-						return err
-					}
-					continue
-				}
-				rows, err := memoryRows(ctx, tx, `SELECT `+memoryColumns+query, id, wid, uid)
-				if err != nil {
-					return err
-				}
-				items = append(items, rows...)
-			}
+			out = []domain.Memory{}
 			if operation == "touch" {
 				out = map[string]any{}
-			} else {
-				out = items
 			}
-			return nil
+			if len(in.ItemIDs) == 0 {
+				return nil
+			}
+			args := []any{wid, uid}
+			ids := []string{}
+			seen := map[string]bool{}
+			for _, id := range in.ItemIDs {
+				if !seen[id] {
+					ids = append(ids, "?")
+					args = append(args, id)
+					seen[id] = true
+				}
+			}
+			where := ` WHERE workspace_id=? AND user_id=? AND id IN (` + strings.Join(ids, ",") + `) AND status='active' AND (expires_at IS NULL OR expires_at>UNIX_TIMESTAMP(UTC_TIMESTAMP(6))) AND NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.workspace_id=m.workspace_id AND t.user_id=m.user_id AND t.fingerprint=m.fingerprint)`
+			if operation == "touch" {
+				_, err := tx.ExecContext(ctx, `UPDATE user_memories m SET use_count=use_count+1,last_used_at=UNIX_TIMESTAMP(UTC_TIMESTAMP(6))`+where, args...)
+				return err
+			}
+			items, err := memoryRows(ctx, tx, `SELECT `+memoryColumns+` FROM user_memories m`+where+` ORDER BY created_at DESC,id DESC`, args...)
+			out = items
+			return err
 		default:
 			return domain.ErrInvalid
 		}

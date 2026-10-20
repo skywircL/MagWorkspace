@@ -27,6 +27,7 @@ from starlette.requests import ClientDisconnect
 from bridge import MAX_REQUEST, MAX_RESPONSE, parse_request, provider_config
 from callback_endpoint import callback_origin
 from retrieval import strict_json
+import memory_extraction
 
 MAX_STREAM = 8 << 20
 MAX_STDERR = 16 << 10
@@ -114,6 +115,8 @@ class Settings:
 class RunResponse(Response):
     """Keep process lifetime, disconnect handling and admission in one scope."""
 
+    output_limit = MAX_RESPONSE
+
     def __init__(self, request_data, raw, streaming, timeout, state):
         super().__init__(content=b"")
         self.data, self.raw, self.streaming = request_data, raw, streaming
@@ -165,7 +168,7 @@ class RunResponse(Response):
             raw = bytearray()
             while chunk := await self.proc.stdout.read(65536):
                 raw.extend(chunk)
-                if len(raw) > MAX_RESPONSE:
+                if len(raw) > self.output_limit:
                     raise WorkerError()
             return bytes(raw)
         result = None
@@ -191,13 +194,16 @@ class RunResponse(Response):
                 raise WorkerError()
         return result
 
-    async def execute(self, send):
-        env = self.state.settings.worker_env
+    def command(self):
         command = [sys.executable, "-S", str(ROOT / "bridge.py")]
         if self.streaming:
             command.append("--stream")
+        return command
+
+    async def execute(self, send):
+        env = self.state.settings.worker_env
         self.spawn = asyncio.create_task(asyncio.create_subprocess_exec(
-            *command, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            *self.command(), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, env=env, cwd=str(ROOT),
             start_new_session=True, limit=MAX_RESPONSE + 1,
         ))
@@ -296,6 +302,26 @@ class RunResponse(Response):
                 raise
 
 
+class ExtractionResponse(RunResponse):
+    output_limit = memory_extraction.MAX_RESPONSE_BYTES
+
+    def __init__(self, data, raw, timeout, state):
+        # The synthetic identifier is local bookkeeping, never a user identity.
+        super().__init__(dict(data, run_id=object()), raw, False, timeout, state)
+
+    def command(self):
+        return [sys.executable, "-S", str(ROOT / "memory_extraction.py")]
+
+    def check_identity(self, value):
+        memory_extraction.validate_result(value, self.data["query"])
+        if len(encode(value)) > memory_extraction.MAX_RESPONSE_BYTES:
+            raise WorkerError()
+
+    async def _cleanup(self):
+        await super()._cleanup()
+        self.state.extractions.discard(self)
+
+
 def create_app():
     settings = Settings()
 
@@ -308,11 +334,56 @@ def create_app():
     app.router.redirect_slashes = False
     app.state.active = set()
     app.state.responses = set()
+    # One dedicated background lane cannot consume interactive run admission.
+    app.state.extractions = set()
     app.state.settings = settings
 
     @app.get("/healthz")
     async def health():
         return {"status": "ok"}
+
+    @app.post("/v1/memories/extract")
+    async def extract_memory(request: Request):
+        started_at = asyncio.get_running_loop().time()
+        try:
+            auth = one_header(request, "authorization", "").encode("utf-8")
+            if not hmac.compare_digest(auth, b"Bearer " + settings.key):
+                return error_response(401, "unauthorized")
+            if one_header(request, "x-magent-protocol") != PROTOCOL:
+                return error_response(400, "invalid_protocol")
+            if one_header(request, "content-type", "").lower() not in ("application/json", "application/json; charset=utf-8"):
+                return error_response(415, "unsupported_media_type")
+            if one_header(request, "accept", "application/json") not in ("application/json", "*/*"):
+                return error_response(406, "unsupported_media_type")
+            timeout = min(settings.timeout, memory_extraction.MAX_TIMEOUT)
+            timeout_ms = one_header(request, "x-magent-timeout-ms")
+            if timeout_ms is not None:
+                if not re.fullmatch(r"[1-9][0-9]{0,12}", timeout_ms):
+                    raise ValueError("invalid timeout")
+                timeout = min(timeout, int(timeout_ms) / 1000)
+            length = one_header(request, "content-length")
+            if length is not None and (not length.isdecimal() or int(length) > memory_extraction.MAX_REQUEST_BYTES):
+                return error_response(413, "request_too_large")
+            raw = bytearray()
+            async with asyncio.timeout(timeout):
+                async for chunk in request.stream():
+                    raw.extend(chunk)
+                    if len(raw) > memory_extraction.MAX_REQUEST_BYTES:
+                        return error_response(413, "request_too_large")
+            data = memory_extraction.parse_request(bytes(raw))
+        except (ValueError, TypeError, UnicodeError, RecursionError, TimeoutError, ClientDisconnect):
+            return error_response(400, "invalid_request")
+        if not settings.mode:
+            return error_response(503, "agent_unavailable")
+        timeout -= asyncio.get_running_loop().time() - started_at
+        if timeout <= 0:
+            return error_response(502, "agent_failed")
+        if app.state.extractions:
+            return error_response(429, "agent_busy")
+        response = ExtractionResponse(data, bytes(raw), timeout, app.state)
+        app.state.responses.add(response)
+        app.state.extractions.add(response)
+        return response
 
     @app.post("/v1/runs")
     async def run(request: Request):
