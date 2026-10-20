@@ -11,6 +11,15 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".cache" / "retrieval-evaluation-qdrant"
+RERANK_CONFIG_KEYS = {
+    "RERANK_MODEL", "RERANK_MODEL_REVISION", "RERANK_MAX_CANDIDATES", "RERANK_THRESHOLD",
+    "RERANK_MAX_PASSAGE_RUNES", "RERANK_MAX_INPUT_TOKENS", "RERANK_REQUEST_TIMEOUT",
+}
+# Only public model defaults are read; never read the application's private .env.
+RERANK_DEFAULTS = dict(line.split("=", 1) for line in (ROOT / ".env.example").read_text().splitlines()
+                      if "=" in line and line.split("=", 1)[0] in RERANK_CONFIG_KEYS)
+if set(RERANK_DEFAULTS) != RERANK_CONFIG_KEYS:
+    raise ValueError("public reranker defaults are incomplete")
 
 
 def private_write(path, text):
@@ -41,12 +50,26 @@ def runtime():
             values[key] = "0"
         private_write(envfile, "".join(f"{key}={value}\n" for key, value in values.items()))
     values = dict(line.split("=", 1) for line in envfile.read_text().splitlines() if line and not line.startswith("#"))
-    # Upgrade private runtime configuration without touching frozen benchmark evidence.
+    # Upgrade private infrastructure configuration, never ingestion state or reports.
+    changed = False
     if "REDIS_PASSWORD" not in values:
         values.update(REDIS_PASSWORD=secrets.token_hex(24), REDIS_PORT="0")
-        private_write(envfile, "".join(f"{key}={value}\n" for key, value in values.items()))
+        changed = True
     if "MAGENT_SERVICE_API_KEY" not in values:
         values.update(MAGENT_SERVICE_API_KEY=secrets.token_hex(32), MAGENT_SERVICE_PORT="0")
+        changed = True
+    additions = {**RERANK_DEFAULTS, "RERANK_API_KEY": secrets.token_hex(32), "RERANK_PORT": "0",
+                 "MAGWORKSPACE_RERANK_CACHE_VOLUME": os.environ.get("MAGWORKSPACE_RERANK_CACHE_VOLUME", "magworkspace_reranker-models")}
+    for key, value in additions.items():
+        if key not in values:
+            values[key] = value
+            changed = True
+    for key in ("MAGWORKSPACE_MODEL_CACHE_VOLUME", "MAGWORKSPACE_RERANK_CACHE_VOLUME"):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", values[key]):
+            raise ValueError("invalid model cache volume name")
+    if len(values["RERANK_API_KEY"]) < 32:
+        raise ValueError("invalid private reranker credential")
+    if changed:
         private_write(envfile, "".join(f"{key}={value}\n" for key, value in values.items()))
     override = RUNTIME / "override.yaml"
     return envfile, override, values
@@ -58,19 +81,48 @@ def main():
     p.add_argument("--infra-only", action="store_true")
     p.add_argument("--observability", action=argparse.BooleanOptionalAction, default=None)
     p.add_argument("--execution", choices=("qdrant_native",))
+    p.add_argument("--rerank", action=argparse.BooleanOptionalAction, default=None,
+                   help="enable local reranking; new stacks default to disabled, existing settings are retained")
+    p.add_argument("--chunking-strategy", choices=("structure_v2",),
+                   help="chunking strategy for a new, empty evaluation stack")
+    p.add_argument("--model-ready-timeout", type=int, default=3600,
+                   help="maximum seconds waiting for a requested reranker to download/load (default 3600)")
     p.add_argument("--remove-data", action="store_true", help="delete this benchmark project's synthetic data; preserves model cache")
     args = p.parse_args()
+    if not 1 <= args.model_ready_timeout <= 86400:
+        p.error("--model-ready-timeout must be 1..86400")
     envfile, override, values = runtime()
     settings_path = RUNTIME / "settings.json"
     settings = json.loads(settings_path.read_text()) if settings_path.exists() else {"observability": False, "execution": "qdrant_native"}
+    previous_rerank = settings.setdefault("rerank", False)
+    if args.rerank is not None:
+        settings["rerank"] = args.rerank
+    strategy = settings.get("chunking_strategy", values.get("CHUNKING_STRATEGY"))
+    if args.action == "up" and (strategy not in (None, "structure_v2") or
+            (strategy is None and (RUNTIME / "scifact-state.json").exists())):
+        p.error("obsolete or unknown chunking state; clear old evaluation data before structure_v2")
+    if args.chunking_strategy:
+        if strategy and args.chunking_strategy != strategy and (RUNTIME / "scifact-state.json").exists():
+            p.error("existing ingestion state has another chunking strategy; use a new evaluation runtime")
+        strategy = args.chunking_strategy
+    if strategy is None and args.action == "up":
+        if (RUNTIME / "scifact-state.json").exists():
+            p.error("existing ingestion state lacks a recorded chunking strategy; pass --chunking-strategy explicitly")
+        strategy = "structure_v2"
+    if strategy is not None:
+        if strategy not in ("legacy_v1", "structure_v2"):
+            raise ValueError("invalid recorded chunking strategy")
+        settings["chunking_strategy"] = strategy
     if args.observability is not None:
         settings["observability"] = args.observability
     if args.action == "up-observability":
         settings["observability"] = True
     if args.execution:
         settings["execution"] = args.execution
-    if settings["execution"] not in ("qdrant_native",) or type(settings["observability"]) is not bool:
+    if (settings["execution"] not in ("qdrant_native",) or type(settings["observability"]) is not bool
+            or type(settings["rerank"]) is not bool):
         raise ValueError("invalid evaluation stack settings")
+    settings["rerank_configuration"] = {key: values[key] for key in RERANK_DEFAULTS}
     private_write(settings_path, json.dumps(settings) + "\n")
     private_write(override, """services:
   backend:
@@ -79,6 +131,10 @@ def main():
       INDEX_JOB_TIMEOUT: 15m
       EMBEDDING_REQUEST_TIMEOUT: 5m
       RETRIEVAL_EXECUTION: qdrant_native
+      RERANK_ENABLED: '""" + ("true" if settings["rerank"] else "false") + """'
+""" + (f"      CHUNKING_STRATEGY: '{strategy}'\n" if strategy else "") + """  reranker:
+    healthcheck:
+      start_period: """ + str(args.model_ready_timeout) + """s
   ollama:
     environment:
       OLLAMA_KEEP_ALIVE: 24h
@@ -86,6 +142,9 @@ volumes:
   ollama-models:
     external: true
     name: ${MAGWORKSPACE_MODEL_CACHE_VOLUME}
+  reranker-models:
+    external: true
+    name: ${MAGWORKSPACE_RERANK_CACHE_VOLUME}
 """)
     env = dict(os.environ, **values)
     command = ["docker", "compose", "--env-file", str(envfile), "--project-name", values["COMPOSE_PROJECT_NAME"], "--profile", "app", "-f", str(ROOT / "compose.yaml")]
@@ -102,6 +161,15 @@ volumes:
         subprocess.run(["docker", "volume", "create", values["MAGWORKSPACE_MODEL_CACHE_VOLUME"]], check=True, stdout=subprocess.DEVNULL)
         compose("up", "-d", "--build", "--wait", "mysql", "minio", "qdrant", "tika", "ollama")
         compose("run", "--rm", "ollama-model")
+        if settings["rerank"]:
+            subprocess.run(["docker", "volume", "create", values["MAGWORKSPACE_RERANK_CACHE_VOLUME"]],
+                           check=True, stdout=subprocess.DEVNULL)
+            print(f"Waiting up to {args.model_ready_timeout}s for the configured local reranker "
+                  f"{values['RERANK_MODEL']} to download/load; first download can be slow. "
+                  "A timeout retains its resumable cache.", flush=True)
+            compose("up", "-d", "--build", "--wait", "--wait-timeout", str(args.model_ready_timeout), "reranker")
+        elif previous_rerank:
+            compose("stop", "reranker")
         if not args.infra_only:
             compose("up", "-d", "--build", "backend")
             if settings["observability"]:
@@ -132,7 +200,7 @@ volumes:
         print("Created a dedicated evaluation identity; private credentials saved under .cache/retrieval-evaluation-qdrant.")
         return
     endpoints = {}
-    for service, port in (("backend", 8080), ("backend", 9091), ("ollama", 11434), ("qdrant", 6333), ("jaeger", 16686), ("prometheus", 9090)):
+    for service, port in (("backend", 8080), ("backend", 9091), ("ollama", 11434), ("qdrant", 6333), ("reranker", 8091), ("jaeger", 16686), ("prometheus", 9090)):
         result = subprocess.run(command + ["port", service, str(port)], env=env, cwd=ROOT, text=True, capture_output=True)
         if result.returncode == 0 and result.stdout.strip():
             endpoints[f"{service}:{port}"] = "http://" + result.stdout.strip().splitlines()[0]

@@ -101,9 +101,10 @@ func indexFailure(w http.ResponseWriter, err error) {
 
 func (s *server) searchDocuments(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Query string `json:"query"`
-		Mode  string `json:"mode"`
-		Limit int    `json:"limit"`
+		Query  string `json:"query"`
+		Mode   string `json:"mode"`
+		Limit  int    `json:"limit"`
+		Rerank *bool  `json:"rerank"`
 	}
 	if !decode(w, r, &in) || !s.indexingEnabled(w) {
 		return
@@ -114,9 +115,9 @@ func (s *server) searchDocuments(w http.ResponseWriter, r *http.Request) {
 	if in.Limit == 0 {
 		in.Limit = 10
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	hits, err := s.cfg.Indexing.Search(ctx, userID(r), r.PathValue("workspaceID"), in.Query, in.Mode, in.Limit)
+	result, err := s.cfg.Indexing.SearchScopedDetailed(ctx, userID(r), r.PathValue("workspaceID"), in.Query, in.Mode, in.Limit, nil, in.Rerank)
 	if err != nil {
 		var external *indexing.Failure
 		if errors.As(err, &external) {
@@ -126,5 +127,5 @@ func (s *server) searchDocuments(w http.ResponseWriter, r *http.Request) {
 		indexFailure(w, err)
 		return
 	}
-	respond(w, 200, map[string]any{"mode": in.Mode, "execution": s.cfg.Indexing.Execution(), "profile_id": s.cfg.Indexing.IndexProfile().ID, "hits": hits})
+	respond(w, 200, map[string]any{"mode": in.Mode, "execution": s.cfg.Indexing.Execution(), "profile_id": s.cfg.Indexing.IndexProfile().ID, "hits": result.Hits, "rerank": result.Rerank, "retrieval_policy_id": result.RetrievalPolicyID})
 }

@@ -530,7 +530,7 @@ func TestMySQLIndexFailureRetainsCleanupLeaseAndGrace(t *testing.T) {
 func TestMySQLIndexMigrationPreservesV2AndRetriesPartialDDL(t *testing.T) {
 	s, dsn := testStore(t)
 	ctx := context.Background()
-	for _, table := range []string{"document_indexes", "index_cleanup"} {
+	for _, table := range []string{"index_outbox", "document_indexes", "index_cleanup"} {
 		_, err := s.pool.ExecContext(ctx, `DROP TABLE `+table)
 		must(t, err)
 	}

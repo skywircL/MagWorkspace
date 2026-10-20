@@ -11,9 +11,10 @@ const (
 
 // IndexProfile identifies every input that can affect derived text or vectors.
 type IndexProfile struct {
-	ID         string `json:"id"`
-	Model      string `json:"model"`
-	Dimensions int    `json:"dimensions"`
+	ID               string `json:"id"`
+	Model            string `json:"model"`
+	Dimensions       int    `json:"dimensions"`
+	ChunkingStrategy string `json:"chunking_strategy,omitempty"`
 }
 
 type IndexProgress struct {
@@ -74,9 +75,12 @@ type IndexReference struct {
 }
 
 type SearchHit struct {
-	Chunk IndexChunk `json:"chunk"`
-	Title string     `json:"title"`
-	Score float64    `json:"score"`
+	Chunk                    IndexChunk `json:"chunk"`
+	Title                    string     `json:"title"`
+	Score                    float64    `json:"score"`
+	RetrievalScore           *float64   `json:"retrieval_score,omitempty"`
+	RerankScore              *float64   `json:"rerank_score,omitempty"`
+	NormalizedRetrievalScore *float64   `json:"normalized_retrieval_score,omitempty"`
 }
 
 type IndexCleanup struct {

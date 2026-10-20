@@ -13,6 +13,10 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT / ".cache/retrieval-evaluation-qdrant"
+RERANK_CONFIG_KEYS = {
+    "RERANK_MODEL", "RERANK_MODEL_REVISION", "RERANK_MAX_CANDIDATES", "RERANK_THRESHOLD",
+    "RERANK_MAX_PASSAGE_RUNES", "RERANK_MAX_INPUT_TOKENS", "RERANK_REQUEST_TIMEOUT",
+}
 
 
 def run(*arguments):
@@ -27,9 +31,9 @@ def source_fingerprint():
     production = sorted(p for folder in (ROOT / "cmd", ROOT / "internal") for p in folder.rglob("*.go") if not p.name.endswith("_test.go"))
     evaluator = sorted(p for p in (ROOT / "scripts/retrieval_eval").glob("*.py") if not p.name.startswith("test"))
     sql = sorted((ROOT / "internal").rglob("*.sql"))
-    packaging = sorted(p for folder in (ROOT / "docker", ROOT / "bridges", ROOT / "observability") if folder.exists() for p in folder.rglob("*") if p.is_file() and not any(part in (".deps", "__pycache__") for part in p.parts) and (p.suffix in (".py", ".yaml", ".yml", ".txt", ".xml") or p.name == "Dockerfile"))
+    packaging = sorted(p for folder in (ROOT / "docker", ROOT / "bridges", ROOT / "observability") if folder.exists() for p in folder.rglob("*") if p.is_file() and not any(part in (".deps", "__pycache__") for part in p.parts) and (p.suffix in (".py", ".sh", ".yaml", ".yml", ".txt", ".xml") or p.name == "Dockerfile"))
     schedulers = [ROOT / "scripts" / name for name in ("run-scifact.py", "evaluation-stack.py", "download-scifact.py")]
-    files = [ROOT / "go.mod", ROOT / "go.sum", ROOT / "Dockerfile", ROOT / ".dockerignore", ROOT / "compose.yaml", ROOT / "compose.observability.yaml", *production, *evaluator, *sql, *packaging, *schedulers]
+    files = [ROOT / "go.mod", ROOT / "go.sum", ROOT / "Dockerfile", ROOT / ".dockerignore", ROOT / ".env.example", ROOT / "compose.yaml", ROOT / "compose.observability.yaml", *production, *evaluator, *sql, *packaging, *schedulers]
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
 
 
@@ -185,11 +189,66 @@ def application_sha256():
     return digest
 
 
+def reranker_environment(expected_enabled):
+    settings = json.loads((RUNTIME / "settings.json").read_text())
+    if (type(settings.get("rerank")) is not bool or settings["rerank"] != expected_enabled
+            or settings.get("chunking_strategy") != "structure_v2"):
+        raise ValueError("evaluation stack retrieval settings differ from requested benchmark")
+    result = {"enabled": expected_enabled, "chunking_strategy": settings["chunking_strategy"]}
+    if not expected_enabled:
+        return result
+    config = settings["rerank_configuration"]
+    if (not isinstance(config, dict) or set(config) != RERANK_CONFIG_KEYS
+            or any(not isinstance(value, str) or len(value) > 256 for value in config.values())):
+        raise ValueError("invalid recorded reranker configuration")
+    values = dict(line.split("=", 1) for line in (RUNTIME / "stack.env").read_text().splitlines()
+                  if line and not line.startswith("#"))
+    if any(values.get(key) != value for key, value in config.items()):
+        raise ValueError("reranker configuration differs from recorded stack settings")
+    endpoint = json.loads((RUNTIME / "endpoints.json").read_text())["reranker:8091"]
+    request = urllib.request.Request(endpoint + "/info",
+                                    headers={"Authorization": "Bearer " + values["RERANK_API_KEY"]})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=15) as response:
+        info = json.load(response)
+    if (info.get("model_id") != config["RERANK_MODEL"]
+            or info.get("model_sha") != config["RERANK_MODEL_REVISION"]
+            or not isinstance(info.get("model_type"), dict) or "reranker" not in info["model_type"]
+            or info.get("auto_truncate") is not True):
+        raise ValueError("loaded reranker model differs from frozen configuration")
+    for field in ("max_input_length", "max_batch_tokens", "max_client_batch_size"):
+        if type(info.get(field)) is not int or info[field] <= 0:
+            raise ValueError("invalid reranker runtime limits")
+    if (info["max_input_length"] > info["max_batch_tokens"]
+            or info["max_batch_tokens"] != int(config["RERANK_MAX_INPUT_TOKENS"])
+            or info["max_client_batch_size"] < int(config["RERANK_MAX_CANDIDATES"])):
+        raise ValueError("reranker runtime limits differ from configured policy")
+    result.update(configuration=config, loaded_model={
+        key: info[key] for key in ("model_id", "model_sha", "max_input_length",
+                                  "max_batch_tokens", "max_client_batch_size", "auto_truncate")})
+    return result
+
+
+def stack_arguments(args):
+    arguments = ["scripts/evaluation-stack.py", "up", "--observability", "--execution", "qdrant_native",
+                 "--rerank" if args.rerank else "--no-rerank", "--model-ready-timeout", str(args.model_ready_timeout)]
+    if args.chunking_strategy:
+        arguments += ["--chunking-strategy", args.chunking_strategy]
+    return arguments
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--wait-for-existing-ingest", action="store_true", help="wait for a separately running ingest instead of starting a second process")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/evaluations/scifact-qdrant")
+    parser.add_argument("--rerank", action="store_true", help="enable the local reranker; default is the retrieval baseline")
+    parser.add_argument("--chunking-strategy", choices=("structure_v2",),
+                        help="otherwise reuse the stack's recorded strategy; old unrecorded caches require this flag")
+    parser.add_argument("--model-ready-timeout", type=int, default=3600,
+                        help="maximum seconds waiting for reranker download/load before evaluation")
     args = parser.parse_args()
+    if not 1 <= args.model_ready_timeout <= 86400:
+        parser.error("--model-ready-timeout must be 1..86400")
     args.output = args.output.resolve()
     dataset, state, auth = ROOT / ".cache/datasets/scifact", RUNTIME / "scifact-state.json", RUNTIME / "scifact-auth.json"
     run("scripts/download-scifact.py")
@@ -208,7 +267,7 @@ def main():
                 raise ValueError("ingestion wait expired; state retained")
             time.sleep(60)
     else:
-        run("scripts/evaluation-stack.py", "up", "--observability", "--execution", "qdrant_native")
+        run(*stack_arguments(args))
         run("scripts/evaluation-stack.py", "register")
         run("-u", "-m", "scripts.retrieval_eval", "ingest", "--dataset", dataset, "--split", "test",
             "--state", state, "--auth-file", auth, "--base-url", base_url(), "--workers", "2", "--wait-timeout", "86400", "--poll-interval", "10")
@@ -219,29 +278,34 @@ def main():
         raise ValueError("full ingestion state is not complete")
     frozen_environment = qdrant_environment(ready_state)
     tree_hash = hashlib.sha256(json.dumps(frozen_sources, sort_keys=True).encode()).hexdigest()
-    run("scripts/evaluation-stack.py", "up", "--observability", "--execution", "qdrant_native")
+    run(*stack_arguments(args))
     if source_fingerprint() != frozen_sources:
         raise ValueError("source changed while building the frozen benchmark")
     frozen_binary = application_sha256()
+    frozen_reranker = reranker_environment(args.rerank)
     freeze = {"schema": 1, "source_sha256": tree_hash, "measured_environment": {
         **frozen_environment, "application_sha256": frozen_binary, "source_files": frozen_sources,
+        "reranker": frozen_reranker,
         "corpus_sha256": ready_state["corpus_sha256"], "profile_id": ready_state["profile_id"]}}
     freeze_path = args.output / "environment.freeze.json"
     persist_freeze(freeze_path, freeze)
     common = ("--dataset", dataset, "--split", "test", "--state", state, "--auth-file", auth, "--output", args.output, "--environment-file", freeze_path)
     run("-u", "-m", "scripts.retrieval_eval", "run", *common, "--base-url", base_url(),
-        "--label", "qdrant", "--expected-execution", "qdrant_native", "--modes", "lexical,vector,hybrid")
+        "--label", "qdrant", "--expected-execution", "qdrant_native", "--modes", "lexical,vector,hybrid",
+        "--request-timeout", "125")
     for name, before, after in (("hybrid-vs-lexical", "qdrant.lexical", "qdrant.hybrid"),
                                 ("hybrid-vs-vector", "qdrant.vector", "qdrant.hybrid")):
         run("-m", "scripts.retrieval_eval", "compare", "--dataset", dataset, "--split", "test",
             "--baseline", args.output / (before + ".rankings.jsonl"),
             "--candidate", args.output / (after + ".rankings.jsonl"), "--output", args.output / (name + ".json"))
-    if source_fingerprint() != frozen_sources or application_sha256() != frozen_binary or qdrant_environment(json.loads(state.read_text())) != frozen_environment:
+    if (source_fingerprint() != frozen_sources or application_sha256() != frozen_binary
+            or qdrant_environment(json.loads(state.read_text())) != frozen_environment
+            or reranker_environment(args.rerank) != frozen_reranker):
         raise ValueError("source/model/index environment changed during benchmark; do not accept comparison")
     report = {"completed_at": datetime.datetime.now(datetime.timezone.utc).isoformat(), "source_sha256": tree_hash,
               "source_files": frozen_sources, "application_sha256": frozen_binary,
               "evaluation_stack": json.loads((RUNTIME / "settings.json").read_text()),
-              "measured_environment": frozen_environment,
+              "measured_environment": {**frozen_environment, "reranker": frozen_reranker},
               "latency_limit": "Sequential runs; quality paired bootstrap is valid, latency remains descriptive under changing cache/load/order."}
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "environment.json").write_text(json.dumps(report, indent=2) + "\n")

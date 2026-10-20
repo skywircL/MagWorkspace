@@ -57,13 +57,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 class Backend:
     """EvidenceBackend adapter; server authorization is bound to the capability."""
 
-    def __init__(self, endpoint: dict, timeout: float = 30.0):
+    def __init__(self, endpoint: dict, timeout: float = 95.0):
         checked = validate_endpoint(endpoint)
         self._url = checked["url"]
         self._token = checked["token"]
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("invalid retrieval timeout")
-        self._timeout = min(30.0, timeout)
+        self._timeout = min(95.0, timeout)
         self._client = None
 
     async def __aenter__(self):

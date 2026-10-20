@@ -204,7 +204,7 @@ func (q *qdrantClient) Upsert(ctx context.Context, profile, generation, workspac
 	return ctx.Err()
 }
 func (q *qdrantClient) Search(ctx context.Context, profile, workspace string, generations []string, query string, vector []float32, mode string, limit int) ([]domain.IndexCandidate, error) {
-	if !hexID(profile, 64) || !hexID(workspace, 32) || (mode != "vector" && mode != "lexical" && mode != "hybrid") || limit < 1 || limit > 100 || (mode != "lexical" && (!validVector(vector) || len(vector) > maxSearchDimensions)) || (mode != "vector" && (strings.TrimSpace(query) == "" || !utf8.ValidString(query) || len(query) > 64<<10)) {
+	if !hexID(profile, 64) || !hexID(workspace, 32) || (mode != "vector" && mode != "lexical" && mode != "hybrid") || limit < 1 || limit > 200 || (mode != "lexical" && (!validVector(vector) || len(vector) > maxSearchDimensions)) || (mode != "vector" && (strings.TrimSpace(query) == "" || !utf8.ValidString(query) || len(query) > 64<<10)) {
 		return nil, qdrantInvalid()
 	}
 	allowed := map[string]bool{}
@@ -234,8 +234,8 @@ func (q *qdrantClient) Search(ctx context.Context, profile, workspace string, ge
 		request["params"] = params
 	case "hybrid":
 		request["prefetch"] = []any{
-			map[string]any{"query": q.bm25(query), "using": "bm25", "filter": filter, "limit": 100},
-			map[string]any{"query": vector, "using": "dense", "filter": filter, "limit": 100, "params": params},
+			map[string]any{"query": q.bm25(query), "using": "bm25", "filter": filter, "limit": max(100, limit)},
+			map[string]any{"query": vector, "using": "dense", "filter": filter, "limit": max(100, limit), "params": params},
 		}
 		// Qdrant uses zero-based ranks: k=61 matches our former 1/(60+rank)
 		// with one-based ranks. Never fuse these already-fused scores again.

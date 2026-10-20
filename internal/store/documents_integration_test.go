@@ -323,6 +323,8 @@ func TestMySQLDocumentMigrationUpgradeAndInterruptedRetry(t *testing.T) {
 	must(t, err)
 	must(t, s.FinishRun(ctx, u.ID, w.ID, session.ID, run.ID, "old answer", "demo"))
 	// Only the test's own fresh empty derived/v2 tables are removed to reconstruct v1.
+	_, err = s.pool.ExecContext(ctx, `DROP TABLE index_outbox`)
+	must(t, err)
 	_, err = s.pool.ExecContext(ctx, `DROP TABLE document_indexes`)
 	must(t, err)
 	_, err = s.pool.ExecContext(ctx, `DROP TABLE index_cleanup`)

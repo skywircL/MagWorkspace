@@ -33,6 +33,10 @@ func configureIndexing() (*indexSetup, error) {
 	if err != nil || workers < 1 || workers > 4 {
 		return nil, errors.New("INDEX_WORKERS must be 1..4")
 	}
+	maxRetries, err := strconv.Atoi(env("INDEX_MAX_RETRIES", "3"))
+	if err != nil || maxRetries < 0 || maxRetries > 10 {
+		return nil, errors.New("INDEX_MAX_RETRIES must be 0..10")
+	}
 	timeout, err := time.ParseDuration(env("INDEX_JOB_TIMEOUT", "5m"))
 	if err != nil || timeout < time.Second || timeout > 30*time.Minute {
 		return nil, errors.New("INDEX_JOB_TIMEOUT must be 1s..30m")
@@ -66,5 +70,16 @@ func configureIndexing() (*indexSetup, error) {
 		return nil, errors.New("invalid QDRANT_URL or BM25_AVG_LEN")
 	}
 
-	return &indexSetup{profile: indexing.Profile(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen), parser: parser, embedder: embedder, search: search, opts: indexing.Options{Workers: workers, JobTimeout: timeout, Execution: execution}}, nil
+	if env("CHUNKING_STRATEGY", indexing.ChunkingStructure) != indexing.ChunkingStructure {
+		return nil, errors.New("CHUNKING_STRATEGY must be structure_v2; legacy indexing is retired")
+	}
+	profile, err := indexing.ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, env("CHUNKING_STRATEGY", indexing.ChunkingStructure))
+	if err != nil {
+		return nil, errors.New("CHUNKING_STRATEGY must be structure_v2")
+	}
+	opts := indexing.Options{Workers: workers, MaxRetries: maxRetries, JobTimeout: timeout, Execution: execution}
+	if err := configureReranking(&opts); err != nil {
+		return nil, err
+	}
+	return &indexSetup{profile: profile, parser: parser, embedder: embedder, search: search, opts: opts}, nil
 }

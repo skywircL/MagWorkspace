@@ -84,6 +84,9 @@ func enqueueIndexTx(ctx context.Context, tx *sql.Tx, userID, workspaceID, docume
 	if err != nil {
 		return domain.IndexJob{}, false, err
 	}
+	if err = resetIndexDeliveryTx(ctx, tx, job.ID); err != nil {
+		return domain.IndexJob{}, false, err
+	}
 	job, err = scanIndex(tx.QueryRowContext(ctx, `SELECT `+indexColumns+` FROM document_indexes i WHERE i.id=?`, job.ID))
 	return job, true, err
 }
@@ -162,7 +165,10 @@ func failIndexTx(ctx context.Context, tx *sql.Tx, job domain.IndexJob, code stri
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE document_indexes SET status='failed',error_code=?,lease_expires_at=NULL,finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=?`, code, job.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	return deleteIndexDeliveryTx(ctx, tx, job.ID)
 }
 
 func (s *Store) ClaimIndexJob(ctx context.Context, profileID string, lease time.Duration) (*domain.IndexInput, error) {
@@ -173,14 +179,14 @@ func (s *Store) ClaimIndexJob(ctx context.Context, profileID string, lease time.
 	if err != nil {
 		return nil, err
 	}
-	return s.claimIndexCandidates(ctx, candidates, lease)
+	return s.claimIndexCandidates(ctx, candidates, lease, "")
 }
 
 // PendingIndexJobs is a read of durable transactional intents, not a claim.
 func (s *Store) PendingIndexJobs(ctx context.Context, profileID string) ([]domain.IndexJob, error) {
 	// Candidates are intentionally read without row locks: every claim then takes
 	// Workspace -> Document -> Job, matching upload, membership and deletion.
-	rows, err := s.pool.QueryContext(ctx, `SELECT `+indexColumns+` FROM document_indexes i WHERE i.profile_id=? AND (i.status='queued' OR (i.status='running' AND i.lease_expires_at<=UTC_TIMESTAMP(6))) ORDER BY i.created_at,i.id LIMIT 256`, profileID)
+	rows, err := s.pool.QueryContext(ctx, `SELECT `+indexColumns+` FROM document_indexes i JOIN index_outbox o ON o.job_id=i.id WHERE i.profile_id=? AND ((i.status='queued' AND o.next_attempt_at<=UTC_TIMESTAMP(6)) OR (i.status='running' AND i.lease_expires_at<=UTC_TIMESTAMP(6))) ORDER BY i.created_at,i.id LIMIT 256`, profileID)
 	if err != nil {
 		return nil, dbError(err)
 	}
@@ -212,9 +218,9 @@ func (s *Store) ClaimIndexJobByID(ctx context.Context, profileID, id string, lea
 	if err != nil {
 		return nil, err
 	}
-	return s.claimIndexCandidates(ctx, []domain.IndexJob{job}, lease)
+	return s.claimIndexCandidates(ctx, []domain.IndexJob{job}, lease, "")
 }
-func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.IndexJob, lease time.Duration) (*domain.IndexInput, error) {
+func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.IndexJob, lease time.Duration, deliveryID string) (*domain.IndexInput, error) {
 	var err error
 	for _, candidate := range candidates {
 		var input *domain.IndexInput
@@ -224,6 +230,17 @@ func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.In
 				return err
 			}
 			if job.Status != "queued" && (job.Status != "running" || active) {
+				return nil
+			}
+			var currentDelivery string
+			var due bool
+			var recoveries int
+			if err = tx.QueryRowContext(ctx, `SELECT id,next_attempt_at<=UTC_TIMESTAMP(6),lease_recoveries FROM index_outbox WHERE job_id=? FOR UPDATE`, job.ID).Scan(&currentDelivery, &due, &recoveries); errors.Is(err, sql.ErrNoRows) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			if (deliveryID != "" && currentDelivery != deliveryID) || (job.Status == "queued" && !due) {
 				return nil
 			}
 			if deleted {
@@ -238,6 +255,14 @@ func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.In
 			}
 			if job.Attempts == math.MaxInt32 {
 				return failIndexTx(ctx, tx, job, "attempt_limit")
+			}
+			if job.Status == "running" {
+				if recoveries >= maxIndexLeaseRecoveries {
+					return failIndexTx(ctx, tx, job, "lease_recovery_exhausted")
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE index_outbox SET lease_recoveries=lease_recoveries+1 WHERE job_id=?`, job.ID); err != nil {
+					return err
+				}
 			}
 			if err = queueIndexCleanupTx(ctx, tx, job.ProfileID, job.Generation); err != nil {
 				return err
@@ -316,18 +341,16 @@ func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJo
 			return domain.ErrConflict
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE document_indexes SET status='ready',artifact_key=?,artifact_sha256=?,chunk_count=?,lease_expires_at=NULL,error_code='',finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=?`, artifactKey, artifactSHA256, chunkCount, job.ID)
-		return err
+		if err != nil {
+			return err
+		}
+		return deleteIndexDeliveryTx(ctx, tx, job.ID)
 	})
 }
 
 func (s *Store) FailDocumentIndex(ctx context.Context, expected domain.IndexJob, code string) error {
-	if !validHexID(expected.Generation) || len(code) == 0 || len(code) > 100 {
+	if !validHexID(expected.Generation) || !validIndexFailureCode(code) {
 		return domain.ErrInvalid
-	}
-	for _, c := range code {
-		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '_' {
-			return domain.ErrInvalid
-		}
 	}
 	return s.transaction(ctx, func(tx *sql.Tx) error {
 		job, _, _, err := lockIndex(ctx, tx, expected)

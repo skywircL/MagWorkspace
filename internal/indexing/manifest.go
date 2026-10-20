@@ -19,14 +19,15 @@ type manifestChunk struct {
 	SHA256    string `json:"sha256"`
 }
 type manifest struct {
-	Format       int             `json:"format"`
-	IndexID      string          `json:"index_id"`
-	Generation   string          `json:"generation"`
-	DocumentID   string          `json:"document_id"`
-	VersionID    string          `json:"version_id"`
-	SourceSHA256 string          `json:"source_sha256"`
-	Text         string          `json:"text"`
-	Chunks       []manifestChunk `json:"chunks"`
+	Format           int             `json:"format"`
+	ChunkingStrategy string          `json:"chunking_strategy,omitempty"`
+	IndexID          string          `json:"index_id"`
+	Generation       string          `json:"generation"`
+	DocumentID       string          `json:"document_id"`
+	VersionID        string          `json:"version_id"`
+	SourceSHA256     string          `json:"source_sha256"`
+	Text             string          `json:"text"`
+	Chunks           []manifestChunk `json:"chunks"`
 }
 
 func artifactKey(profile, generation string) string {
@@ -34,8 +35,18 @@ func artifactKey(profile, generation string) string {
 }
 func digestBytes(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 
-func encodeManifest(job domain.IndexJob, text string, chunks []domain.IndexChunk) ([]byte, error) {
-	m := manifest{Format: 1, IndexID: job.ID, Generation: job.Generation, DocumentID: job.DocumentID, VersionID: job.VersionID, SourceSHA256: job.SourceSHA256, Text: text}
+func encodeManifest(job domain.IndexJob, text string, chunks []domain.IndexChunk, strategy string) ([]byte, error) {
+	if strategy == "" {
+		strategy = ChunkingStructure
+	}
+	m := manifest{Format: 2, ChunkingStrategy: strategy, IndexID: job.ID, Generation: job.Generation, DocumentID: job.DocumentID, VersionID: job.VersionID, SourceSHA256: job.SourceSHA256, Text: text}
+	switch strategy {
+	case ChunkingLegacy:
+		m.Format, m.ChunkingStrategy = 1, ""
+	case ChunkingStructure:
+	default:
+		return nil, &Failure{Code: "artifact_invalid"}
+	}
 	for _, c := range chunks {
 		m.Chunks = append(m.Chunks, manifestChunk{c.ID, c.Ordinal, c.StartByte, c.EndByte, c.SHA256})
 	}
@@ -61,10 +72,18 @@ func (s *Service) loadManifest(ctx context.Context, job domain.IndexJob) ([]doma
 		return nil, &Failure{Code: "artifact_integrity_failed"}
 	}
 	var m manifest
-	if json.Unmarshal(data, &m) != nil || m.Format != 1 || m.IndexID != job.ID || m.Generation != job.Generation || m.DocumentID != job.DocumentID || m.VersionID != job.VersionID || m.SourceSHA256 != job.SourceSHA256 || len(m.Chunks) != job.ChunkCount {
+	if json.Unmarshal(data, &m) != nil || m.IndexID != job.ID || m.Generation != job.Generation || m.DocumentID != job.DocumentID || m.VersionID != job.VersionID || m.SourceSHA256 != job.SourceSHA256 || len(m.Chunks) != job.ChunkCount {
 		return nil, &Failure{Code: "artifact_integrity_failed"}
 	}
-	chunks, err := Split(m.Text)
+	strategy := m.ChunkingStrategy
+	switch {
+	case m.Format == 1 && strategy == "":
+		strategy = ChunkingLegacy
+	case m.Format == 2 && strategy == ChunkingStructure:
+	default:
+		return nil, &Failure{Code: "artifact_integrity_failed"}
+	}
+	chunks, err := SplitWithStrategy(m.Text, strategy)
 	if err != nil || len(chunks) != len(m.Chunks) {
 		return nil, &Failure{Code: "artifact_integrity_failed"}
 	}

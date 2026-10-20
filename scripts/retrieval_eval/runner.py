@@ -1,5 +1,6 @@
 """Resumable ingestion, measured API queries, immutable evaluation manifests."""
 import concurrent.futures
+from collections import Counter
 import datetime
 import hashlib
 import json
@@ -20,6 +21,117 @@ def utc_now():
 
 def digest_json(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+
+
+POLICY_CONTRACT = "retrieval-policy-v1"
+RERANK_OUTCOMES = {"disabled", "no_candidates", "ok", "threshold_degraded",
+                   "fallback_top1", "all_below_threshold", "model_error"}
+APPLIED_RERANK_OUTCOMES = {"ok", "threshold_degraded", "fallback_top1", "all_below_threshold"}
+
+
+class RetrievalPolicyError(EvaluationError):
+    """A changed policy aborts the run instead of becoming a scored failure."""
+
+
+def valid_policy_id(value):
+    return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def load_policy_freeze(path, manifest, required=False):
+    if not path.exists() and not required:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise RetrievalPolicyError("retrieval policy freeze is missing or invalid") from None
+    if (not isinstance(value, dict) or set(value) != {"schema", "manifest_sha256", "retrieval_policy_id"}
+            or type(value["schema"]) is not int or value["schema"] != 1
+            or value["manifest_sha256"] != digest_json(manifest)
+            or not valid_policy_id(value["retrieval_policy_id"])):
+        raise RetrievalPolicyError("retrieval policy freeze differs from the evaluation manifest")
+    return value
+
+
+def freeze_response_policy(response, path, manifest, frozen):
+    policy_id = response.get("retrieval_policy_id") if isinstance(response, dict) else None
+    if not valid_policy_id(policy_id):
+        raise RetrievalPolicyError("search response lacks a valid retrieval policy ID; use the current API")
+    if frozen is None:
+        frozen = {"schema": 1, "manifest_sha256": digest_json(manifest), "retrieval_policy_id": policy_id}
+        # Persist before interpreting model diagnostics or appending any ranking:
+        # even a failed reranker response establishes the run's observed policy.
+        atomic_json(path, frozen)
+    elif frozen["retrieval_policy_id"] != policy_id:
+        raise RetrievalPolicyError("retrieval policy changed; use a new evaluation output directory/label")
+    return frozen
+
+
+def safe_rerank_diagnostics(value):
+    if (not isinstance(value, dict) or type(value.get("applied")) is not bool
+            or not isinstance(value.get("outcome"), str)
+            or value.get("outcome") not in RERANK_OUTCOMES
+            or value["applied"] != (value["outcome"] in APPLIED_RERANK_OUTCOMES)):
+        raise EvaluationError("search response has invalid rerank diagnostics")
+    result = {"applied": value["applied"], "outcome": value["outcome"]}
+    for field in ("candidate_count", "result_count"):
+        if field in value:
+            count = value[field]
+            if type(count) is not int or not 0 <= count <= 1000:
+                raise EvaluationError("search response has invalid rerank counts")
+            result[field] = count
+    for field in ("threshold", "effective_threshold", "top_score"):
+        if field in value:
+            number = value[field]
+            if type(number) not in (int, float) or not math.isfinite(number) or not 0 <= number <= 1:
+                raise EvaluationError("search response has invalid rerank score diagnostics")
+            result[field] = number
+    if "fallback_used" in value:
+        if type(value["fallback_used"]) is not bool:
+            raise EvaluationError("search response has invalid rerank fallback diagnostic")
+        result["fallback_used"] = value["fallback_used"]
+    code = value.get("error_code")
+    if isinstance(code, str) and code in {"rerank_invalid", "rerank_invalid_response", "rerank_unavailable", "rerank_timeout"}:
+        result["error_code"] = code
+    return result
+
+
+def expected_rerank_mode(frozen_environment):
+    if frozen_environment is None:
+        return None
+    measured = frozen_environment["value"]["measured_environment"]
+    if "reranker" not in measured:
+        return None  # Older completed environments remain readable.
+    reranker = measured["reranker"]
+    if not isinstance(reranker, dict) or type(reranker.get("enabled")) is not bool:
+        raise RetrievalPolicyError("frozen environment has invalid reranker enablement")
+    return reranker["enabled"]
+
+
+def verify_rerank_mode(diagnostic, expected_enabled):
+    if expected_enabled is not None and (diagnostic["outcome"] == "disabled") != (not expected_enabled):
+        raise RetrievalPolicyError("rerank enablement differs from frozen environment")
+
+
+def verify_record_policy(records, frozen, expected_enabled=None):
+    for record in records:
+        # New network failures explicitly carry null. Older rows without this
+        # key must never be silently resumed under a new retrieval policy.
+        if "retrieval_policy_id" not in record:
+            raise RetrievalPolicyError("existing rankings lack retrieval policy evidence; use a new output label")
+        observed = record["retrieval_policy_id"]
+        if observed is None:
+            if record.get("status") != "error" or "rerank" in record:
+                raise RetrievalPolicyError("ranking is missing retrieval policy evidence")
+        elif (frozen is None or not valid_policy_id(observed)
+              or observed != frozen["retrieval_policy_id"]):
+            raise RetrievalPolicyError("rankings contain mixed or unfrozen retrieval policies")
+        if "rerank" in record:
+            diagnostic = safe_rerank_diagnostics(record["rerank"])
+            verify_rerank_mode(diagnostic, expected_enabled)
+            if diagnostic["outcome"] == "model_error" and record.get("status") != "error":
+                raise RetrievalPolicyError("rerank model fallback was recorded as a successful query")
+        elif record.get("status") == "ok":
+            raise RetrievalPolicyError("successful ranking lacks rerank diagnostics")
 
 
 def evaluator_source_sha256(directory=None):
@@ -299,6 +411,10 @@ def summary_markdown(summary):
             lines += ["Limited verification: document heads only; ready index generations were not checked.", ""]
     if summary.get("recorded_failed_attempts_before_retry"):
         lines += [f'Failed attempts retained before explicit retry: {summary["recorded_failed_attempts_before_retry"]}.', ""]
+    if "observed_retrieval_policy_id" in summary:
+        lines += [f'Retrieval policy: {summary["observed_retrieval_policy_id"]}.',
+                  "Rerank outcomes: " + json.dumps(summary["rerank_outcomes"], sort_keys=True) + ".",
+                  "Rerank model failures score zero and remain in the query denominator.", ""]
     return "\n".join(lines)
 
 
@@ -314,6 +430,7 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
         raise EvaluationError("expected execution must be baseline, optimized or qdrant_native")
     evaluator_sha = evaluator_source_sha256()
     frozen_environment = environment_freeze(environment_file)
+    expected_rerank = expected_rerank_mode(frozen_environment)
     # Preflight all queries; invalid/oversized inputs never disappear from a run.
     prepared = {row["_id"]: query_for_api(row["text"], policy) for row in dataset["queries"]}
     state = load_state(state_path, dataset)
@@ -327,6 +444,7 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     manifest = {"schema": 1, "dataset": dataset_info(dataset), "label": label, "modes": modes,
+                "retrieval_policy_contract": POLICY_CONTRACT,
                 "evaluator_source_sha256": evaluator_sha, "environment_freeze": frozen_environment,
                 "chunk_limit": chunk_limit, "query_policy": policy, "truncated_queries": sum(v[1] for v in prepared.values()),
                 "workspace_id": workspace, "profile_id": state["profile_id"], "mapping_sha256": digest_json(state["documents"]),
@@ -341,6 +459,8 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
                 raise EvaluationError("output manifest changed; use a new output directory/label")
     else:
         atomic_json(manifest_path, manifest)
+    policy_path = output / (label + ".policy.json")
+    frozen_policy = load_policy_freeze(policy_path, manifest)
     verification_before = verify_remote_corpus(client, state, verify_indexes, "before", progress)
     records, paths = {}, {}
     for mode in modes:
@@ -349,6 +469,10 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
         ids = [r.get("query_id") for r in records[mode]]
         if len(ids) != len(set(ids)) or not set(ids).issubset(dataset["qrels"]):
             raise EvaluationError("existing rankings contain unknown or duplicate queries")
+        verify_record_policy(records[mode], frozen_policy, expected_rerank)
+        attempts_path = output / f"{label}.{mode}.failed-attempts.jsonl"
+        if attempts_path.exists():
+            verify_record_policy(load_records(attempts_path), frozen_policy, expected_rerank)
         if retry_errors:
             failures = [record for record in records[mode] if record.get("status") == "error"]
             for failure in failures:
@@ -369,10 +493,15 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
             if qid in completed[mode]:
                 continue
             record = {"query_id": qid, "status": "ok", "ranking": [], "query_truncated": truncated,
+                      "retrieval_policy_id": None,
                       "submitted_query_sha256": hashlib.sha256(query.encode()).hexdigest(), "attempted_at": utc_now()}
             started = time.perf_counter()
             try:
                 response = client.request("POST", f"/workspaces/{workspace}/search", {"query": query, "mode": mode, "limit": chunk_limit})
+                frozen_policy = freeze_response_policy(response, policy_path, manifest, frozen_policy)
+                record["retrieval_policy_id"] = frozen_policy["retrieval_policy_id"]
+                record["rerank"] = safe_rerank_diagnostics(response.get("rerank"))
+                verify_rerank_mode(record["rerank"], expected_rerank)
                 if response["profile_id"] != state["profile_id"] or response["mode"] != mode:
                     raise EvaluationError("search profile/mode differs from frozen evaluation manifest")
                 execution = response.get("execution")
@@ -383,6 +512,8 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
                         (observed_execution and execution != observed_execution)):
                     raise EvaluationError("search execution strategy changed or differs from expected execution")
                 observed_execution = execution
+                if record["rerank"]["outcome"] == "model_error":
+                    raise EvaluationError("rerank model failed; retrieval fallback is not a successful rerank evaluation")
                 hits = response["hits"]
                 for hit in hits:
                     corpus_id = reverse.get(hit["chunk"]["document_id"])
@@ -395,6 +526,8 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
                 record["chunk_hits"], record["document_hits"] = len(hits), len(record["ranking"])
                 record["chunk_ranking"] = [{"corpus_id": reverse[hit["chunk"]["document_id"]],
                                             "chunk_id": hit["chunk"].get("id"), "score": hit.get("score")} for hit in hits]
+            except RetrievalPolicyError:
+                raise
             except EvaluationError as error:
                 record.update(status="error", error=str(error))
             except (KeyError, TypeError, ValueError):
@@ -408,11 +541,18 @@ def evaluate(client, dataset, state_path, output, modes, label, chunk_limit=50, 
     verification_after = verify_remote_corpus(client, state, verify_indexes, "after", progress)
     if evaluator_source_sha256() != evaluator_sha or environment_freeze(environment_file) != frozen_environment:
         raise EvaluationError("evaluator source or external environment freeze changed during evaluation")
+    if load_policy_freeze(policy_path, manifest) != frozen_policy:
+        raise RetrievalPolicyError("retrieval policy freeze changed during evaluation")
     summaries = {}
     for mode in modes:
         summary = score_records(records[mode], dataset["qrels"])
         summary.update(label=label, mode=mode, manifest_sha256=digest_json(manifest), created_at=utc_now(), dataset=dataset_info(dataset))
         summary["observed_execution"] = observed_execution
+        summary["observed_retrieval_policy_id"] = frozen_policy["retrieval_policy_id"] if frozen_policy else None
+        summary["retrieval_policy_freeze_sha256"] = digest_json(frozen_policy) if frozen_policy else None
+        summary["rerank_outcomes"] = dict(Counter(record.get("rerank", {}).get("outcome", "unavailable")
+                                                  for record in records[mode]))
+        summary["rerank_model_error_queries"] = summary["rerank_outcomes"].get("model_error", 0)
         summary["evaluator_source_sha256"] = evaluator_sha
         summary["environment_frozen"] = frozen_environment is not None
         summary["ranking_sha256"] = sha256_file(paths[mode])
@@ -498,6 +638,15 @@ def comparison_manifest(path, dataset):
     if (not isinstance(summary, dict) or summary.get("manifest_sha256") != digest_json(manifest) or
             summary.get("ranking_sha256") != sha256_file(path)):
         raise EvaluationError("comparison manifest/ranking digest differs from recorded summary")
+    policy_contract = manifest.get("retrieval_policy_contract")
+    if policy_contract is not None:
+        if policy_contract != POLICY_CONTRACT:
+            raise EvaluationError("comparison retrieval policy contract is unsupported")
+        frozen_policy = load_policy_freeze(path.parent / (label + ".policy.json"), manifest, required=True)
+        if (summary.get("observed_retrieval_policy_id") != frozen_policy["retrieval_policy_id"]
+                or summary.get("retrieval_policy_freeze_sha256") != digest_json(frozen_policy)):
+            raise EvaluationError("comparison summary differs from the frozen retrieval policy")
+        verify_record_policy(load_records(path), frozen_policy, expected_rerank_mode(manifest.get("environment_freeze")))
     execution = summary.get("observed_execution")
     if execution not in ("baseline", "optimized", "qdrant_native") or (manifest["expected_execution"] and execution != manifest["expected_execution"]):
         raise EvaluationError("comparison summary has invalid or unexpected observed execution")
@@ -514,14 +663,40 @@ def comparison_manifest(path, dataset):
     return manifest, summary
 
 
+def comparable_environments(baseline, candidate):
+    if baseline == candidate:
+        return True
+    if baseline is None or candidate is None:
+        return False
+    invariants = []
+    for freeze in (baseline, candidate):
+        value = dict(freeze["value"])
+        measured = dict(value["measured_environment"])
+        # Allow only the explicitly recorded reranking treatment to vary.
+        # Source, binary, embedding, physical corpus and chunking remain frozen.
+        if expected_rerank_mode(freeze) is None:
+            return False
+        reranker = dict(measured["reranker"])
+        for field in ("enabled", "configuration", "loaded_model"):
+            reranker.pop(field, None)
+        measured["reranker"] = reranker
+        value["measured_environment"] = measured
+        invariants.append(value)
+    return invariants[0] == invariants[1]
+
+
 def compare_runs(baseline_path, candidate_path, dataset, samples, seed):
     manifests, summaries = {}, {}
     for name, path in (("baseline", baseline_path), ("candidate", candidate_path)):
         manifests[name], summaries[name] = comparison_manifest(path, dataset)
     if any(manifests["baseline"][key] != manifests["candidate"][key]
            for key in ("profile_id", "mapping_sha256", "workspace_id", "query_policy", "chunk_limit", "corpus_verification",
-                       "evaluator_source_sha256", "environment_freeze")):
+                       "evaluator_source_sha256")):
         raise EvaluationError("paired comparison requires same frozen corpus/profile/query policy/chunk depth")
+    if not comparable_environments(manifests["baseline"]["environment_freeze"], manifests["candidate"]["environment_freeze"]):
+        raise EvaluationError("paired comparison requires the same frozen environment outside reranking treatment")
+    if manifests["baseline"].get("retrieval_policy_contract") != manifests["candidate"].get("retrieval_policy_contract"):
+        raise EvaluationError("paired comparison requires the same retrieval policy evidence contract")
     baseline, candidate = load_records(baseline_path), load_records(candidate_path)
     for name, records in (("baseline", baseline), ("candidate", candidate)):
         prepared = {row["_id"]: query_for_api(row["text"], manifests[name]["query_policy"]) for row in dataset["queries"]}
@@ -541,6 +716,9 @@ def compare_runs(baseline_path, candidate_path, dataset, samples, seed):
     result["ranking_sha256"] = {"baseline": sha256_file(baseline_path), "candidate": sha256_file(candidate_path)}
     result["manifests"] = manifests
     result["execution"] = {name: summary["observed_execution"] for name, summary in summaries.items()}
+    result["retrieval_policy_ids"] = {name: summary.get("observed_retrieval_policy_id") for name, summary in summaries.items()}
+    result["retrieval_policy_frozen"] = all(manifest.get("retrieval_policy_contract") == POLICY_CONTRACT
+                                           for manifest in manifests.values())
     result["corpus_verification"] = {name: summary["corpus_verification"] for name, summary in summaries.items()}
     result["environment_frozen"] = manifests["baseline"]["environment_freeze"] is not None
     return result
@@ -554,6 +732,7 @@ def comparison_markdown(comparison):
         lines.append(f'| {metric} | {item["mean"]:.6f} | [{item["ci95"][0]:.6f}, {item["ci95"][1]:.6f}] |')
     lines += ["", f'Document ranking parity: {comparison["ranking_parity"]}; chunk ranking parity: {comparison["chunk_ranking_parity"]}.',
               "", "Observed execution: " + json.dumps(comparison["execution"], sort_keys=True),
+              "", "Retrieval policies: " + json.dumps(comparison["retrieval_policy_ids"], sort_keys=True),
               "", "Corpus verification: " + json.dumps({name: item["mode"] for name, item in comparison["corpus_verification"].items()}, sort_keys=True),
               "", "Latency (ms): " + json.dumps(comparison["latency_ms"], sort_keys=True), "", comparison["latency_caveat"], ""]
     return "\n".join(lines)

@@ -18,6 +18,7 @@ import (
 	"magworkspace/internal/domain"
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
+	"magworkspace/internal/indexqueue"
 	"magworkspace/internal/memorycapture"
 	"magworkspace/internal/redisstate"
 	"magworkspace/internal/store"
@@ -76,7 +77,7 @@ func run() error {
 		err := redisClient.Ping(ctx)
 		stop()
 		if err != nil {
-			slog.Warn("Redis unavailable; using durable database dispatch; event replay disabled until recovery")
+			slog.Warn("Redis unavailable; durable indexing intents wait for queue recovery; event replay disabled until recovery")
 		}
 	}
 	indexConfig, err := configureIndexing()
@@ -114,11 +115,20 @@ func run() error {
 	shutdown, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	workerCtx, cancelWorkers := context.WithCancel(shutdown)
+	defer cancelWorkers() // Also covers configuration errors before workers start.
 	workersDone := make(chan struct{})
 	var indexes *indexing.Service
 	if indexConfig != nil {
 		indexConfig.opts.Telemetry = telemetry
 		indexConfig.opts.Redis = redisClient
+		if addr := os.Getenv("REDIS_ADDR"); addr != "" {
+			q := indexqueue.New(addr, os.Getenv("REDIS_PASSWORD"), indexConfig.profile.ID, indexConfig.opts.Workers, indexConfig.opts.JobTimeout)
+			defer q.Close()
+			if err := q.Validate(); err != nil {
+				return errors.New("invalid Redis index queue configuration")
+			}
+			indexConfig.opts.Queue = q
+		}
 		indexes = indexing.NewService(db, indexConfig.parser, indexConfig.embedder, indexConfig.search, objects, indexConfig.profile, indexConfig.opts)
 		go func() { defer close(workersDone); indexes.Run(workerCtx) }()
 	} else {

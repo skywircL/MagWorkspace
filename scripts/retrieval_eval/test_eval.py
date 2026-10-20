@@ -14,7 +14,8 @@ from unittest.mock import Mock, patch
 from .api import APIClient, atomic_json
 from .data import CONTENT_POLICY, EvaluationError, corpus_content, dataset_info, load_dataset, query_for_api
 from .metrics import deduplicate_documents, paired_compare, query_metrics, score_records
-from .runner import compare_runs, environment_freeze, evaluator_source_sha256, evaluate, ingest, load_records, load_state
+from .runner import (compare_runs, digest_json, environment_freeze, evaluator_source_sha256, evaluate, ingest,
+                     load_records, load_state)
 
 
 class MetricTests(unittest.TestCase):
@@ -209,6 +210,8 @@ class FakeAPI:
         self.dataset, self.documents, self.search_calls = dataset, {}, 0
         self.fail_query = None
         self.execution = "baseline"
+        self.retrieval_policy_id = "c" * 64
+        self.rerank = {"applied": False, "outcome": "disabled"}
 
     def request(self, method, path, data=None, media="application/json", envelope=False):
         if method == "POST" and path == "/workspaces":
@@ -230,7 +233,8 @@ class FakeAPI:
             docs = list(self.documents.values())
             if data["query"].startswith("Beta"):
                 docs.reverse()
-            return {"profile_id": self.profile_id, "mode": data["mode"], "execution": self.execution, "hits": [
+            return {"profile_id": self.profile_id, "mode": data["mode"], "execution": self.execution,
+                    "retrieval_policy_id": self.retrieval_policy_id, "rerank": dict(self.rerank), "hits": [
                 {"chunk": {"document_id": doc["id"], "version_id": doc["current_version_id"], "index_id": "index-" + doc["id"],
                            "source_sha256": doc["sha256"]}} for doc in docs]}
         raise AssertionError((method, path))
@@ -403,6 +407,7 @@ class ComparisonTests(unittest.TestCase):
             result = self.compare(dataset, output)
             self.assertTrue(result["ranking_parity"])
             self.assertEqual(result["execution"], {"baseline": "baseline", "candidate": "optimized"})
+            self.assertTrue(result["retrieval_policy_frozen"])
 
     def test_missing_one_or_both_manifests_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -440,6 +445,7 @@ class ComparisonTests(unittest.TestCase):
             atomic_json(path, changed)
             with self.assertRaises(EvaluationError):
                 self.compare(dataset, output)
+
 
     def test_comparison_requires_same_evaluator_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -480,6 +486,283 @@ class ComparisonTests(unittest.TestCase):
                 stream.write('{"query_id":"forged"}\n')
             with self.assertRaises(EvaluationError):
                 self.compare(dataset, output)
+
+
+
+class RetrievalPolicyTests(unittest.TestCase):
+    def prepare(self, directory):
+        dataset = make_dataset(directory)
+        client = FakeAPI(dataset)
+        state, output = Path(directory) / "state.json", Path(directory) / "results"
+        ingest(client, dataset, state, progress=lambda _: None)
+        return dataset, client, state, output
+
+    def evaluate(self, prepared, label="paired", **kwargs):
+        dataset, client, state, output = prepared
+        return evaluate(client, dataset, state, output, ["hybrid"], label, progress=lambda _: None, **kwargs)["hybrid"]
+
+    def test_frozen_enablement_rejects_wrong_first_response_without_scoring(self):
+        for enabled, diagnostic in (
+                (True, {"applied": False, "outcome": "disabled"}),
+                (False, {"applied": True, "outcome": "ok"}),
+                (False, {"applied": False, "outcome": "no_candidates"})):
+            with self.subTest(enabled=enabled, outcome=diagnostic["outcome"]), tempfile.TemporaryDirectory() as directory:
+                prepared = self.prepare(directory)
+                prepared[1].rerank = diagnostic
+                path = Path(directory) / "environment.freeze.json"
+                atomic_json(path, {"schema": 1, "source_sha256": "c" * 64,
+                                   "measured_environment": {"reranker": {"enabled": enabled}}})
+                with self.assertRaisesRegex(EvaluationError, "enablement differs"):
+                    self.evaluate(prepared, environment_file=path)
+                self.assertTrue((prepared[3] / "paired.policy.json").exists())
+                self.assertFalse((prepared[3] / "paired.hybrid.rankings.jsonl").exists())
+                self.assertEqual(prepared[1].search_calls, 1)
+
+    def test_enabled_empty_candidates_are_valid_but_resume_cannot_claim_disabled(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            client, output = prepared[1], prepared[3]
+            client.rerank = {"applied": False, "outcome": "no_candidates"}
+            original = client.request
+            def empty(method, path, data=None, media="application/json", envelope=False):
+                response = original(method, path, data, media, envelope)
+                if path.endswith("/search"):
+                    response["hits"] = []
+                return response
+            client.request = empty
+            environment = Path(directory) / "environment.freeze.json"
+            atomic_json(environment, {"schema": 1, "source_sha256": "c" * 64,
+                                      "measured_environment": {"reranker": {"enabled": True}}})
+            summary = self.evaluate(prepared, environment_file=environment)
+            self.assertEqual(summary["coverage"]["successful"], 2)
+            self.assertEqual(summary["metrics"]["Recall@5"], 0)
+            path = output / "paired.hybrid.rankings.jsonl"
+            records = load_records(path)
+            records[0]["rerank"] = {"applied": False, "outcome": "disabled"}
+            from .runner import rewrite_records
+            rewrite_records(path, records)
+            with self.assertRaisesRegex(EvaluationError, "enablement differs"):
+                self.evaluate(prepared, environment_file=environment)
+            self.assertEqual(client.search_calls, 2)
+
+    def test_malformed_frozen_enablement_rejects_before_api(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            environment = Path(directory) / "environment.freeze.json"
+            atomic_json(environment, {"schema": 1, "source_sha256": "c" * 64,
+                                      "measured_environment": {"reranker": {"enabled": "true"}}})
+            with patch.object(prepared[1], "request") as request, self.assertRaisesRegex(EvaluationError, "invalid reranker"):
+                self.evaluate(prepared, environment_file=environment)
+            request.assert_not_called()
+
+    def test_paired_actual_environment_allows_only_reranker_treatment_difference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            dataset, client, _, output = prepared
+            environment = Path(directory) / "environment.freeze.json"
+            measured = {
+                "source_files": {"source.go": "a" * 64}, "application_sha256": "b" * 64,
+                "embedding_model": {"name": "embedding", "digest": "fixed"},
+                "config": {"vectors": 1024}, "points_sha256": "d" * 64, "points_count": 2,
+                "corpus_sha256": "e" * 64, "profile_id": "f" * 64,
+                "reranker": {"enabled": False, "chunking_strategy": "legacy_v1"},
+            }
+            atomic_json(environment, {"schema": 1, "source_sha256": "c" * 64, "measured_environment": measured})
+            self.evaluate(prepared, "baseline", environment_file=environment)
+            baseline_path = output / "baseline.hybrid.rankings.jsonl"
+            measured["reranker"] = {
+                "enabled": True, "chunking_strategy": "legacy_v1",
+                "configuration": {"RERANK_MODEL": "model", "RERANK_MAX_CANDIDATES": "20"},
+                "loaded_model": {"model_id": "model", "model_sha": "fixed-revision", "max_input_length": 512},
+            }
+            client.retrieval_policy_id = "d" * 64
+            client.rerank = {"applied": True, "outcome": "ok"}
+            atomic_json(environment, {"schema": 1, "source_sha256": "c" * 64, "measured_environment": measured})
+            self.evaluate(prepared, "enabled", environment_file=environment)
+            compared = compare_runs(baseline_path, output / "enabled.hybrid.rankings.jsonl", dataset, 100, 42)
+            self.assertTrue(compared["environment_frozen"])
+            self.assertNotEqual(compared["manifests"]["baseline"]["environment_freeze"],
+                                compared["manifests"]["candidate"]["environment_freeze"])
+            for number, field in enumerate(("application_sha256", "embedding_model", "config", "points_sha256", "source_files", "chunking_strategy")):
+                candidate = json.loads(json.dumps(measured))
+                if field == "chunking_strategy":
+                    candidate["reranker"][field] = "structure_v2"
+                else:
+                    candidate[field] = "changed"
+                atomic_json(environment, {"schema": 1, "source_sha256": "c" * 64, "measured_environment": candidate})
+                label = f"changed-{number}"
+                self.evaluate(prepared, label, environment_file=environment)
+                with self.subTest(field=field), self.assertRaisesRegex(EvaluationError, "same frozen environment"):
+                    compare_runs(baseline_path, output / f"{label}.hybrid.rankings.jsonl", dataset, 100, 42)
+
+    def test_policy_is_frozen_before_first_failed_model_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            _, client, _, output = prepared
+            client.rerank = {"applied": False, "outcome": "model_error", "error_code": "rerank_timeout",
+                             "message": "secret provider payload", "passages": ["private content"]}
+            from . import runner
+            original = runner.append_record
+            def check_before_append(path, value):
+                self.assertTrue((output / "paired.policy.json").exists())
+                self.assertEqual(value["retrieval_policy_id"], client.retrieval_policy_id)
+                original(path, value)
+            with patch.object(runner, "append_record", side_effect=check_before_append):
+                summary = self.evaluate(prepared)
+            self.assertEqual(summary["coverage"]["failed"], 2)
+            self.assertEqual(summary["metrics"]["Recall@5"], 0)
+            self.assertEqual(summary["rerank_model_error_queries"], 2)
+            self.assertEqual(summary["observed_retrieval_policy_id"], client.retrieval_policy_id)
+            rows = load_records(output / "paired.hybrid.rankings.jsonl")
+            self.assertTrue(all(row["status"] == "error" and row["ranking"] == [] for row in rows))
+            self.assertNotIn("secret", json.dumps(rows))
+            self.assertNotIn("private", json.dumps(rows))
+            self.assertEqual(rows[0]["rerank"]["error_code"], "rerank_timeout")
+
+    def test_successful_all_rejected_is_empty_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            client = prepared[1]
+            client.rerank = {"applied": True, "outcome": "all_below_threshold"}
+            original = client.request
+            def rejected(method, path, data=None, media="application/json", envelope=False):
+                response = original(method, path, data, media, envelope)
+                if path.endswith("/search"):
+                    response["hits"] = []
+                return response
+            client.request = rejected
+            summary = self.evaluate(prepared)
+            self.assertTrue(summary["coverage"]["complete"])
+            self.assertEqual(summary["metrics"]["Recall@5"], 0)
+            self.assertEqual(summary["rerank_outcomes"], {"all_below_threshold": 2})
+
+    def test_policy_change_on_failure_response_aborts_before_mixed_record(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            client, output = prepared[1], prepared[3]
+            original = client.request
+            def changing(method, path, data=None, media="application/json", envelope=False):
+                response = original(method, path, data, media, envelope)
+                if path.endswith("/search") and client.search_calls == 2:
+                    response["retrieval_policy_id"] = "d" * 64
+                    response["rerank"] = {"applied": False, "outcome": "model_error"}
+                return response
+            client.request = changing
+            with self.assertRaisesRegex(EvaluationError, "retrieval policy changed"):
+                self.evaluate(prepared)
+            self.assertEqual(len(load_records(output / "paired.hybrid.rankings.jsonl")), 1)
+            self.assertFalse((output / "paired.hybrid.summary.json").exists())
+            frozen = json.loads((output / "paired.policy.json").read_text())
+            self.assertEqual(frozen["retrieval_policy_id"], "c" * 64)
+
+    def test_resume_rejects_old_missing_policy_and_tampered_freeze_before_queries(self):
+        for missing in ("record", "freeze", "changed_freeze"):
+            with self.subTest(case=missing), tempfile.TemporaryDirectory() as directory:
+                prepared = self.prepare(directory)
+                self.evaluate(prepared)
+                client, output = prepared[1], prepared[3]
+                if missing == "record":
+                    path = output / "paired.hybrid.rankings.jsonl"
+                    records = load_records(path)
+                    records[0].pop("retrieval_policy_id")
+                    path.write_text("".join(json.dumps(row) + "\n" for row in records))
+                elif missing == "freeze":
+                    (output / "paired.policy.json").unlink()
+                else:
+                    path = output / "paired.policy.json"
+                    freeze = json.loads(path.read_text())
+                    freeze["retrieval_policy_id"] = "d" * 64
+                    atomic_json(path, freeze)
+                before = client.search_calls
+                with self.assertRaises(EvaluationError):
+                    self.evaluate(prepared, retry_errors=True)
+                self.assertEqual(client.search_calls, before)
+
+    def test_resume_retry_cannot_mix_policy_after_failed_query(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            client, output = prepared[1], prepared[3]
+            client.rerank = {"applied": False, "outcome": "model_error"}
+            self.evaluate(prepared)
+            client.retrieval_policy_id = "d" * 64
+            client.rerank = {"applied": True, "outcome": "ok"}
+            with self.assertRaisesRegex(EvaluationError, "retrieval policy changed"):
+                self.evaluate(prepared, retry_errors=True)
+            self.assertEqual(load_records(output / "paired.hybrid.rankings.jsonl"), [])
+            self.assertEqual(len(load_records(output / "paired.hybrid.failed-attempts.jsonl")), 2)
+
+    def test_missing_or_invalid_response_policy_is_fatal(self):
+        for policy in (None, "", "not-a-hash"):
+            with self.subTest(policy=policy), tempfile.TemporaryDirectory() as directory:
+                prepared = self.prepare(directory)
+                prepared[1].retrieval_policy_id = policy
+                with self.assertRaisesRegex(EvaluationError, "policy ID"):
+                    self.evaluate(prepared)
+                self.assertFalse((prepared[3] / "paired.hybrid.summary.json").exists())
+
+    def test_invalid_diagnostics_fail_safely_without_provider_fields(self):
+        for diagnostic in ({"applied": False, "outcome": []},
+                           {"applied": True, "outcome": "disabled"},
+                           {"applied": True, "outcome": "ok", "top_score": float("nan")}):
+            with self.subTest(diagnostic=diagnostic), tempfile.TemporaryDirectory() as directory:
+                prepared = self.prepare(directory)
+                prepared[1].rerank = diagnostic
+                summary = self.evaluate(prepared)
+                self.assertEqual(summary["coverage"]["failed"], 2)
+                # Error rows still freeze the API policy and can be explicitly
+                # retried after fixing the provider, without changing strategy.
+                prepared[1].rerank = {"applied": True, "outcome": "ok", "error_code": ["private"]}
+                summary = self.evaluate(prepared, retry_errors=True)
+                self.assertTrue(summary["coverage"]["complete"])
+                rows = load_records(prepared[3] / "paired.hybrid.rankings.jsonl")
+                self.assertNotIn("private", json.dumps(rows))
+
+    def test_comparison_allows_distinct_frozen_policies_and_checks_policy_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            dataset, client, _, output = prepared
+            self.evaluate(prepared, "baseline")
+            client.retrieval_policy_id = "d" * 64
+            client.rerank = {"applied": True, "outcome": "ok"}
+            self.evaluate(prepared, "rerank")
+            before, after = output / "baseline.hybrid.rankings.jsonl", output / "rerank.hybrid.rankings.jsonl"
+            compared = compare_runs(before, after, dataset, 100, 42)
+            self.assertEqual(compared["retrieval_policy_ids"], {"baseline": "c" * 64, "candidate": "d" * 64})
+            (output / "rerank.policy.json").unlink()
+            with self.assertRaises(EvaluationError):
+                compare_runs(before, after, dataset, 100, 42)
+
+    def test_legacy_completed_reports_remain_readable_for_comparison(self):
+        with tempfile.TemporaryDirectory() as directory:
+            prepared = self.prepare(directory)
+            dataset, _, _, output = prepared
+            for label in ("legacy_one", "legacy_two"):
+                self.evaluate(prepared, label)
+                manifest_path = output / (label + ".manifest.json")
+                manifest = json.loads(manifest_path.read_text())
+                manifest.pop("retrieval_policy_contract")
+                atomic_json(manifest_path, manifest)
+                ranking_path = output / (label + ".hybrid.rankings.jsonl")
+                records = load_records(ranking_path)
+                for record in records:
+                    record.pop("retrieval_policy_id")
+                    record.pop("rerank")
+                ranking_path.write_text("".join(json.dumps(row) + "\n" for row in records))
+                summary_path = output / (label + ".hybrid.summary.json")
+                summary = json.loads(summary_path.read_text())
+                for key in ("observed_retrieval_policy_id", "retrieval_policy_freeze_sha256",
+                            "rerank_outcomes", "rerank_model_error_queries"):
+                    summary.pop(key)
+                summary["manifest_sha256"] = digest_json(manifest)
+                summary["ranking_sha256"] = hashlib.sha256(ranking_path.read_bytes()).hexdigest()
+                atomic_json(summary_path, summary)
+                (output / (label + ".policy.json")).unlink()
+            compared = compare_runs(output / "legacy_one.hybrid.rankings.jsonl",
+                                    output / "legacy_two.hybrid.rankings.jsonl", dataset, 100, 42)
+            self.assertFalse(compared["retrieval_policy_frozen"])
+            self.assertEqual(compared["retrieval_policy_ids"], {"baseline": None, "candidate": None})
+            with self.assertRaisesRegex(EvaluationError, "manifest changed"):
+                self.evaluate(prepared, "legacy_one")
 
 
 class SourceEnvironmentTests(unittest.TestCase):

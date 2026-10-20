@@ -17,20 +17,29 @@ import (
 
 	"magworkspace/internal/blob"
 	"magworkspace/internal/domain"
+	"magworkspace/internal/indexqueue"
 	"magworkspace/internal/observability"
 	"magworkspace/internal/redisstate"
+	"magworkspace/internal/reranking"
 	"magworkspace/internal/store"
 )
 
 type Options struct {
-	Redis        *redisstate.Client
-	Workers      int
-	PollInterval time.Duration
-	JobTimeout   time.Duration
+	Queue          *indexqueue.Queue
+	MaxRetries     int
+	RetryBaseDelay time.Duration
+	Redis          *redisstate.Client
+	Workers        int
+	PollInterval   time.Duration
+	JobTimeout     time.Duration
 	// Execution changes scheduling only; both strategies share retrieval and
 	// authorization semantics. The zero value selects the serial baseline.
-	Execution string
-	Telemetry *observability.Telemetry
+	Execution     string
+	Telemetry     *observability.Telemetry
+	Reranker      reranking.Model
+	RerankOptions reranking.Options
+	// Model identity includes the pinned model revision and operational policy. Never include credentials.
+	RerankModelID string
 }
 
 type Service struct {
@@ -47,13 +56,37 @@ type Service struct {
 // Credentials are intentionally excluded. Changing model content under a fixed
 // model tag requires a new model tag or pipeline revision before rebuilding.
 func Profile(model string, dimensions int, parserURL, embeddingURL, vectorURL string, avgLen float64) domain.IndexProfile {
-	data, _ := json.Marshal([]any{"mw-index-v3/minio-qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3/chunk-800-100", model, dimensions,
+	profile, _ := ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, ChunkingStructure)
+	return profile
+}
+
+// ProfileWithChunking keeps the original profile hash for an explicit legacy
+// rollout. New chunk boundaries require a distinct immutable index namespace.
+func ProfileWithChunking(model string, dimensions int, parserURL, embeddingURL, vectorURL string, avgLen float64, strategy string) (domain.IndexProfile, error) {
+	if strategy == "" {
+		strategy = ChunkingStructure
+	}
+	pipeline := "mw-index-v3/minio-qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3/chunk-800-100"
+	switch strategy {
+	case ChunkingLegacy:
+	case ChunkingStructure:
+		pipeline = "mw-index-v4/minio-qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3/structure-v2-800-100/manifest-2"
+	default:
+		return domain.IndexProfile{}, &Failure{Code: "artifact_invalid"}
+	}
+	data, _ := json.Marshal([]any{pipeline, model, dimensions,
 		strings.TrimRight(parserURL, "/"), strings.TrimRight(embeddingURL, "/"), strings.TrimRight(vectorURL, "/"), bm25Options(avgLen)})
 	hash := sha256.Sum256(data)
-	return domain.IndexProfile{ID: hex.EncodeToString(hash[:]), Model: model, Dimensions: dimensions}
+	return domain.IndexProfile{ID: hex.EncodeToString(hash[:]), Model: model, Dimensions: dimensions, ChunkingStrategy: strategy}, nil
 }
 
 func NewService(db *store.Store, parser Parser, embedder Embedder, search SearchStore, objects blob.Storage, profile domain.IndexProfile, opts Options) *Service {
+	if opts.Reranker != nil && opts.RerankOptions.MaxCandidates == 0 {
+		opts.RerankOptions = reranking.DefaultOptions()
+	}
+	if opts.RetryBaseDelay <= 0 {
+		opts.RetryBaseDelay = 5 * time.Second
+	}
 	if opts.Workers <= 0 {
 		opts.Workers = 1
 	}
@@ -85,7 +118,19 @@ func (s *Service) nativeFusion() bool {
 
 func (s *Service) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	if s.opts.Redis != nil {
+	if s.opts.Queue != nil {
+		for ctx.Err() == nil {
+			if err := s.opts.Queue.Start(ctx, s.ProcessDelivery); err == nil {
+				break
+			}
+			slog.Warn("index queue startup pending")
+			if !pause(ctx, s.opts.PollInterval) {
+				return
+			}
+		}
+		defer s.opts.Queue.Shutdown()
+	}
+	if s.opts.Redis != nil || s.opts.Queue != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -99,7 +144,11 @@ func (s *Service) Run(ctx context.Context) {
 			}
 		}()
 	}
-	for range s.opts.Workers {
+	workers := s.opts.Workers
+	if s.opts.Queue != nil {
+		workers = 0
+	}
+	for range workers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -162,29 +211,69 @@ func (s *Service) ProcessOne(ctx context.Context) (bool, error) {
 	if err != nil || input == nil {
 		return false, err
 	}
+	processErr, persistErr := s.executeClaimed(ctx, input)
+	if persistErr != nil {
+		return true, persistErr
+	}
+	return true, processErr
+}
+
+// ProcessDelivery ACKs only after success or a durable retry/terminal decision.
+// Duplicate and stale deliveries are harmless because the DB owns admission.
+func (s *Service) ProcessDelivery(ctx context.Context, jobID, deliveryID string) error {
+	input, err := s.db.ClaimIndexDelivery(ctx, s.profile.ID, jobID, deliveryID, s.opts.JobTimeout+30*time.Second)
+	if err != nil || input == nil {
+		return err
+	}
+	_, persistErr := s.executeClaimed(ctx, input)
+	return persistErr
+}
+
+func (s *Service) executeClaimed(ctx context.Context, input *domain.IndexInput) (error, error) {
 	jobCtx, cancel := context.WithTimeout(ctx, s.opts.JobTimeout)
-	err = s.process(jobCtx, input)
+	err := s.process(jobCtx, input)
 	cancel()
 	if err == nil {
-		return true, nil
+		return nil, nil
 	}
-	// Shutdown leaves a fenced lease for recovery. A finished/expired old worker
-	// still queues its generation, but cleanup excludes any live published one.
+	// Cancellation leaves a fenced lease; outbox and Asynq both recover it.
 	cleanupCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
-	if ctx.Err() == nil {
-		code := ErrorCode(err)
-		if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrNotFound) {
-			code = "authorization_changed"
-		}
-		if failErr := s.db.FailDocumentIndex(cleanupCtx, input.Job, code); failErr != nil {
-			slog.Warn("index failure persistence pending", "job_id", input.Job.ID)
-		}
+	if ctx.Err() != nil {
+		_ = s.db.QueueIndexCleanup(cleanupCtx, input.Job.ProfileID, input.Job.Generation)
+		return err, ctx.Err()
 	}
-	if cleanupErr := s.db.QueueIndexCleanup(cleanupCtx, input.Job.ProfileID, input.Job.Generation); cleanupErr != nil {
-		slog.Warn("index cleanup persistence pending", "job_id", input.Job.ID)
+	code := ErrorCode(err)
+	if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrNotFound) {
+		code = "authorization_changed"
 	}
-	return true, err
+	var persistErr error
+	if retryableIndexError(err) && s.opts.MaxRetries > 0 {
+		delay := s.opts.RetryBaseDelay
+		for i := 1; i < input.Job.Attempts && delay < 5*time.Minute; i++ {
+			delay *= 2
+		}
+		if delay > 5*time.Minute {
+			delay = 5 * time.Minute
+		}
+		_, persistErr = s.db.RetryDocumentIndex(cleanupCtx, input.Job, code, s.opts.MaxRetries, delay)
+	} else {
+		persistErr = s.db.FailDocumentIndex(cleanupCtx, input.Job, code)
+	}
+	// A changed generation, deleted workspace or committed ready state wins.
+	if errors.Is(persistErr, domain.ErrConflict) || errors.Is(persistErr, domain.ErrNotFound) {
+		persistErr = s.db.QueueIndexCleanup(cleanupCtx, input.Job.ProfileID, input.Job.Generation)
+	}
+	return err, persistErr
+}
+
+func retryableIndexError(err error) bool {
+	switch ErrorCode(err) {
+	case "source_unavailable", "parser_unavailable", "embedding_unavailable", "embedding_timeout", "index_unavailable", "qdrant_unavailable", "artifact_unavailable", "publication_unavailable", "processing_timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) process(ctx context.Context, input *domain.IndexInput) (resultErr error) {
@@ -197,7 +286,7 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 	s.progress(ctx, input.Job, "loading", 0)
 	content, err := s.db.LoadIndexSource(ctx, *input)
 	if err != nil {
-		if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrConflict) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
 		if ctx.Err() != nil {
@@ -206,7 +295,7 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 		if errors.Is(err, blob.ErrIntegrity) {
 			return &Failure{Code: "source_integrity_failed"}
 		}
-		return &Failure{Code: "source_unavailable"}
+		return &Failure{Code: "source_unavailable", Cause: err}
 	}
 	digest := sha256.Sum256(content)
 	if hex.EncodeToString(digest[:]) != input.Job.SourceSHA256 || input.Version.SHA256 != input.Job.SourceSHA256 || input.Version.ID != input.Job.VersionID || input.Version.SizeBytes != len(content) {
@@ -221,7 +310,7 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 	}
 	s.progress(ctx, input.Job, "chunking", 0)
 	_, finishChunk := s.opts.Telemetry.Start(ctx, "index.chunk")
-	chunks, err := Split(text)
+	chunks, err := SplitWithStrategy(text, s.profile.ChunkingStrategy)
 	finishChunk(err)
 	if err != nil {
 		return err
@@ -266,7 +355,7 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 			return err
 		}
 		var err error
-		artifact, err = encodeManifest(input.Job, text, chunks)
+		artifact, err = encodeManifest(input.Job, text, chunks, s.profile.ChunkingStrategy)
 		if err != nil {
 			return err
 		}
@@ -284,6 +373,11 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 	publishCtx, finishPublish := s.opts.Telemetry.Start(ctx, "index.publish")
 	err = s.db.FinishDocumentIndex(publishCtx, input.Job, key, digestBytes(artifact), len(chunks))
 	finishPublish(err)
+	if err != nil && !errors.Is(err, domain.ErrForbidden) && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrInvalid) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		// This includes DB deadlock/lock-timeout, mapped to Conflict by store.
+		// Retry's generation/status guard protects an already committed ready.
+		err = &Failure{Code: "publication_unavailable", Cause: err}
+	}
 	if err == nil {
 		s.opts.Telemetry.ObserveCount("index.process", "success", len(chunks))
 	}
@@ -295,6 +389,7 @@ func (s *Service) CleanupOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var firstErr error
 	for _, item := range items {
 		cleanCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err = s.search.DeleteGeneration(cleanCtx, item.ProfileID, item.Generation)
@@ -306,10 +401,18 @@ func (s *Service) CleanupOnce(ctx context.Context) error {
 		}
 		cancel()
 		if err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if deferErr := s.db.DeferIndexCleanup(ctx, item.ID, 30*time.Second); deferErr != nil {
+				return deferErr
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 func (s *Service) Search(ctx context.Context, userID, workspaceID, query, mode string, limit int) ([]domain.SearchHit, error) {
@@ -318,7 +421,12 @@ func (s *Service) Search(ctx context.Context, userID, workspaceID, query, mode s
 
 // SearchScoped applies a server-authorized document selection throughout search.
 // nil selects the workspace; [] explicitly selects no documents.
-func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, mode string, limit int, documentIDs []string) (results []domain.SearchHit, resultErr error) {
+func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, mode string, limit int, documentIDs []string) ([]domain.SearchHit, error) {
+	result, err := s.SearchScopedDetailed(ctx, userID, workspaceID, query, mode, limit, documentIDs, nil)
+	return result.Hits, err
+}
+
+func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, mode string, limit int, documentIDs []string, rerank bool, diagnostic *reranking.Diagnostics) (results []domain.SearchHit, resultErr error) {
 	ctx, finish := s.opts.Telemetry.Start(ctx, "retrieval.search")
 	started := time.Now()
 	defer func() {
@@ -344,10 +452,14 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 	if len(generations) == 0 {
 		return []domain.SearchHit{}, nil
 	}
+	candidateLimit := 100
+	if rerank {
+		candidateLimit = max(candidateLimit, s.opts.RerankOptions.MaxCandidates)
+	}
 	var scores map[string]float64
 	var candidatesByID map[string]domain.IndexCandidate
 	if s.nativeFusion() {
-		candidates, err := s.nativeCandidates(ctx, workspaceID, generations, query, mode)
+		candidates, err := s.nativeCandidates(ctx, workspaceID, generations, query, mode, candidateLimit)
 		if err != nil {
 			return nil, err
 		}
@@ -358,13 +470,29 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 			candidatesByID[c.ChunkID] = c
 		}
 	} else {
-		lexical, vector, err := s.retrieveCandidates(ctx, workspaceID, generations, query, mode)
+		lexical, vector, err := s.retrieveCandidates(ctx, workspaceID, generations, query, mode, candidateLimit)
 		if err != nil {
 			return nil, err
 		}
 		_, finishMerge := s.opts.Telemetry.Start(ctx, "retrieval.merge")
 		scores, candidatesByID = mergeCandidates(lexical, vector)
 		finishMerge(nil)
+	}
+	normalizeRetrievalScores(scores, mode, s.nativeFusion())
+	// Bound the globally fused set before hydration. Both branches can each
+	// return 200 rows, while the database resolver accepts at most 200 hints.
+	candidateIDs := make([]string, 0, len(candidatesByID))
+	for id := range candidatesByID {
+		candidateIDs = append(candidateIDs, id)
+	}
+	sort.Slice(candidateIDs, func(i, j int) bool {
+		if scores[candidateIDs[i]] == scores[candidateIDs[j]] {
+			return candidateIDs[i] < candidateIDs[j]
+		}
+		return scores[candidateIDs[i]] > scores[candidateIDs[j]]
+	})
+	for _, id := range candidateIDs[min(len(candidateIDs), 200):] {
+		delete(candidatesByID, id)
 	}
 	s.opts.Telemetry.ObserveCount("retrieval.merge", "success", len(candidatesByID))
 	ids := make([]string, 0, len(candidatesByID))
@@ -379,6 +507,7 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 	}
 	hits := []domain.SearchHit{}
 	published := make(map[string]domain.IndexJob)
+	headers := make(map[string]string)
 	hydrateCtx, finishHydrate := s.opts.Telemetry.Start(ctx, "retrieval.hydrate")
 	for _, ref := range refs {
 		chunks, err := s.loadManifest(hydrateCtx, ref.Job)
@@ -387,6 +516,11 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 			return nil, err
 		}
 		published[ref.Job.ID] = ref.Job
+		if rerank {
+			for id, header := range contextHeaders(chunks) {
+				headers[id] = header
+			}
+		}
 		for _, chunk := range chunks {
 			c, ok := candidatesByID[chunk.ID]
 			if ok && c.IndexID == ref.Job.ID && c.Generation == ref.Job.Generation {
@@ -396,44 +530,32 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 	}
 	finishHydrate(nil)
 	s.opts.Telemetry.ObserveCount("retrieval.hydrate", "success", len(hits))
-	// Repeat authorization and current-head filtering after all remote reads.
-	filterCtx, finishFilter := s.opts.Telemetry.Start(ctx, "retrieval.filter")
-	refs, err = s.db.ResolveIndexes(filterCtx, userID, workspaceID, s.profile.ID, ids, documentIDs)
+	// Recheck before sending trusted passages to the model, then again after
+	// the external call (including a successful empty result or model fallback).
+	hits, err = s.currentHits(ctx, userID, workspaceID, ids, documentIDs, published, hits)
 	if err != nil {
-		finishFilter(err)
 		return nil, err
 	}
-	current := make(map[string]domain.IndexReference)
-	for _, ref := range refs {
-		prior := published[ref.Job.ID]
-		if prior.Generation == ref.Job.Generation && prior.ArtifactSHA256 == ref.Job.ArtifactSHA256 {
-			current[ref.Job.ID] = ref
+	sortRetrievalHits(hits)
+	if rerank {
+		hits, err = s.rerankHits(ctx, query, hits, headers, limit, len(documentIDs) > 0, diagnostic)
+		if err != nil {
+			return nil, err
+		}
+		hits, err = s.currentHits(ctx, userID, workspaceID, ids, documentIDs, published, hits)
+		if err != nil {
+			return nil, err
 		}
 	}
-	filtered := hits[:0]
-	for _, hit := range hits {
-		if ref, ok := current[hit.Chunk.IndexID]; ok {
-			hit.Title = ref.Title
-			filtered = append(filtered, hit)
-		}
-	}
-	hits = filtered
-	sort.Slice(hits, func(i, j int) bool {
-		if hits[i].Score == hits[j].Score {
-			return hits[i].Chunk.ID < hits[j].Chunk.ID
-		}
-		return hits[i].Score > hits[j].Score
-	})
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
-	finishFilter(nil)
 	s.opts.Telemetry.ObserveCount("retrieval.filter", "success", len(hits))
 	return hits, nil
 }
 
 // Native BM25 and RRF run in one Qdrant query with identical prefilters.
-func (s *Service) nativeCandidates(ctx context.Context, workspace string, generations []string, query, mode string) ([]domain.IndexCandidate, error) {
+func (s *Service) nativeCandidates(ctx context.Context, workspace string, generations []string, query, mode string, candidateLimit int) ([]domain.IndexCandidate, error) {
 	var vector []float32
 	if mode != "lexical" {
 		embedCtx, finish := s.opts.Telemetry.Start(ctx, "retrieval.embed")
@@ -455,7 +577,7 @@ func (s *Service) nativeCandidates(ctx context.Context, workspace string, genera
 		stage = "retrieval.vector"
 	}
 	queryCtx, finish := s.opts.Telemetry.Start(ctx, stage)
-	items, err := s.search.Search(queryCtx, s.profile.ID, workspace, generations, query, vector, mode, 100)
+	items, err := s.search.Search(queryCtx, s.profile.ID, workspace, generations, query, vector, mode, candidateLimit)
 	finish(err)
 	return items, err
 }
@@ -463,10 +585,10 @@ func (s *Service) nativeCandidates(ctx context.Context, workspace string, genera
 // Both execution strategies use the same retrievers and fusion. Optimized only
 // overlaps independent external calls; source resolution and trusted hydration
 // retain the same ordering and final authorization checks as the baseline.
-func (s *Service) retrieveCandidates(ctx context.Context, workspaceID string, generations []string, query, mode string) (lexical, vector []domain.IndexCandidate, err error) {
+func (s *Service) retrieveCandidates(ctx context.Context, workspaceID string, generations []string, query, mode string, candidateLimit int) (lexical, vector []domain.IndexCandidate, err error) {
 	lexicalSearch := func(ctx context.Context) ([]domain.IndexCandidate, error) {
 		ctx, finish := s.opts.Telemetry.Start(ctx, "retrieval.lexical")
-		items, err := s.search.Search(ctx, s.profile.ID, workspaceID, generations, query, nil, "lexical", 100)
+		items, err := s.search.Search(ctx, s.profile.ID, workspaceID, generations, query, nil, "lexical", candidateLimit)
 		finish(err)
 		if err == nil {
 			s.opts.Telemetry.ObserveCount("retrieval.lexical", "success", len(items))
@@ -484,7 +606,7 @@ func (s *Service) retrieveCandidates(ctx context.Context, workspaceID string, ge
 			return nil, err
 		}
 		ctx, finish := s.opts.Telemetry.Start(ctx, "retrieval.vector")
-		items, err := s.search.Search(ctx, s.profile.ID, workspaceID, generations, query, vectors[0], "vector", 100)
+		items, err := s.search.Search(ctx, s.profile.ID, workspaceID, generations, query, vectors[0], "vector", candidateLimit)
 		finish(err)
 		if err == nil {
 			s.opts.Telemetry.ObserveCount("retrieval.vector", "success", len(items))
@@ -570,6 +692,21 @@ func executionOutcome(err error) string {
 // DispatchOnce reconciles all upload/update/approval paths through committed
 // MySQL intents. Crash before/after Redis publication is safe to repeat.
 func (s *Service) DispatchOnce(ctx context.Context) error {
+	if s.opts.Queue != nil {
+		deliveries, err := s.db.PendingIndexDeliveries(ctx, s.profile.ID, 256)
+		if err != nil {
+			return err
+		}
+		for _, d := range deliveries {
+			if err := s.opts.Queue.Enqueue(ctx, d.ID, d.JobID); err != nil {
+				return err
+			}
+			if err := s.db.MarkIndexDeliverySent(ctx, d); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	if s.opts.Redis == nil {
 		return nil
 	}

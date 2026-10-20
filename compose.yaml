@@ -70,6 +70,16 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://jaeger:4318/v1/traces}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       APP_ENV: ${APP_ENV:-development}
+      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      RERANK_URL: http://reranker:8091/rerank
+      RERANK_API_KEY: ${RERANK_API_KEY:-}
+      RERANK_MODEL: ${RERANK_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+      RERANK_MODEL_REVISION: ${RERANK_MODEL_REVISION:-1427fd652930e4ba29e8149678df786c240d8825}
+      RERANK_MAX_CANDIDATES: ${RERANK_MAX_CANDIDATES:-20}
+      RERANK_THRESHOLD: ${RERANK_THRESHOLD:-0.2}
+      RERANK_MAX_PASSAGE_RUNES: ${RERANK_MAX_PASSAGE_RUNES:-2048}
+      RERANK_MAX_INPUT_TOKENS: ${RERANK_MAX_INPUT_TOKENS:-1024}
+      RERANK_REQUEST_TIMEOUT: ${RERANK_REQUEST_TIMEOUT:-30s}
       RETRIEVAL_EXECUTION: ${RETRIEVAL_EXECUTION:-qdrant_native}
       DOCUMENT_INDEXING_ENABLED: ${DOCUMENT_INDEXING_ENABLED:-true}
       TIKA_URL: http://tika:9998
@@ -85,6 +95,8 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
       INDEX_WORKERS: ${INDEX_WORKERS:-1}
+      INDEX_MAX_RETRIES: ${INDEX_MAX_RETRIES:-3}
+      CHUNKING_STRATEGY: ${CHUNKING_STRATEGY:-structure_v2}
       INDEX_JOB_TIMEOUT: ${INDEX_JOB_TIMEOUT:-5m}
     ports:
       - "127.0.0.1:${HTTP_PORT:-8080}:8080"
@@ -130,6 +142,31 @@ services:
         read_only: true
         bind:
           create_host_path: false
+  reranker:
+    profiles: [indexing, app]
+    build:
+      context: .
+      dockerfile: docker/reranker/Dockerfile
+    image: magworkspace-reranker:local
+    environment:
+      API_KEY: ${RERANK_API_KEY:-}
+      MODEL_ID: ${RERANK_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
+      REVISION: ${RERANK_MODEL_REVISION:-1427fd652930e4ba29e8149678df786c240d8825}
+      MAX_BATCH_TOKENS: ${RERANK_MAX_INPUT_TOKENS:-1024}
+    ports:
+      - "127.0.0.1:${RERANK_PORT:-18091}:8091"
+    volumes:
+      - reranker-models:/data
+    mem_limit: 4g
+    cpus: 2
+    init: true
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 60s
+    stop_grace_period: 30s
   ollama:
     profiles: [indexing, app]
     image: ollama/ollama:0.40.5
@@ -231,6 +268,7 @@ volumes:
   redis-data:
   mysql-data:
   ollama-models:
+  reranker-models:
   search-data:
   qdrant-data:
   minio-data:

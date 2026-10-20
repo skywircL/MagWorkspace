@@ -1,10 +1,13 @@
 """Regression checks for orchestration resumes; no Docker or live API calls."""
 import copy
+import argparse
 import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -17,6 +20,13 @@ SCRIPT = Path(__file__).resolve().with_name("run-scifact.py")
 
 def load_orchestrator():
     spec = importlib.util.spec_from_file_location("scifact_orchestration_test", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_stack():
+    spec = importlib.util.spec_from_file_location("evaluation_stack_test", SCRIPT.with_name("evaluation-stack.py"))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -330,9 +340,10 @@ class OrchestrationRuntimeContractTests(unittest.TestCase):
     def test_source_freeze_includes_build_inputs_and_excludes_test_code(self):
         orchestrator = load_orchestrator()
         sources = orchestrator.source_fingerprint()
-        for required in (".dockerignore", "Dockerfile", "compose.yaml", "scripts/run-scifact.py",
+        for required in (".dockerignore", ".env.example", "Dockerfile", "compose.yaml", "scripts/run-scifact.py",
                          "scripts/evaluation-stack.py", "scripts/download-scifact.py",
-                         "scripts/retrieval_eval/runner.py", "internal/indexing/service.go"):
+                         "scripts/retrieval_eval/runner.py", "internal/indexing/service.go",
+                         "docker/reranker/entrypoint.sh"):
             self.assertIn(required, sources)
         self.assertTrue(any(name.endswith(".sql") for name in sources))
         self.assertTrue(any(name.startswith("docker/") and name.endswith(".xml") for name in sources))
@@ -373,6 +384,233 @@ class OrchestrationRuntimeContractTests(unittest.TestCase):
                         execute.return_value.stdout = invalid
                         with self.assertRaises(ValueError):
                             orchestrator.application_sha256()
+
+
+class RerankStackOrchestrationTests(unittest.TestCase):
+    def setUp(self):
+        self.stack = load_stack()
+        self.directory = tempfile.TemporaryDirectory(prefix="mw-rerank-orchestration-")
+        self.addCleanup(self.directory.cleanup)
+        self.runtime = Path(self.directory.name)
+        self.addCleanup(patch.stopall)
+        patch.object(self.stack, "RUNTIME", self.runtime).start()
+        self.execute = patch.object(self.stack.subprocess, "run", side_effect=self.fake_execute).start()
+        response = io.BytesIO(b"")
+        response.status = 200
+        patch("urllib.request.urlopen", return_value=response).start()
+        self.output = io.StringIO()
+        patch("sys.stdout", self.output).start()
+
+    def fake_execute(self, arguments, **kwargs):
+        if "port" in arguments:
+            return subprocess.CompletedProcess(arguments, 0, "127.0.0.1:18080\n", "")
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    def invoke(self, *arguments):
+        with patch.object(sys, "argv", ["evaluation-stack.py", *arguments]):
+            self.stack.main()
+
+    def commands(self):
+        return [item.args[0] for item in self.execute.call_args_list]
+
+    def test_new_baseline_is_explicitly_disabled_despite_parent_environment(self):
+        with patch.dict(os.environ, {"RERANK_ENABLED": "true", "RERANK_API_KEY": "caller-secret"}):
+            self.invoke("up")
+        settings = json.loads((self.runtime / "settings.json").read_text())
+        self.assertFalse(settings["rerank"])
+        self.assertEqual(settings["chunking_strategy"], "structure_v2")
+        override = (self.runtime / "override.yaml").read_text()
+        self.assertIn("RERANK_ENABLED: 'false'", override)
+        self.assertIn("CHUNKING_STRATEGY: 'structure_v2'", override)
+        self.assertFalse(any("up" in command and command[-1] == "reranker" for command in self.commands()))
+        self.assertNotIn("RERANK_API_KEY", settings["rerank_configuration"])
+        private = dict(line.split("=", 1) for line in (self.runtime / "stack.env").read_text().splitlines())
+        self.assertGreaterEqual(len(private["RERANK_API_KEY"]), 32)
+        self.assertNotEqual(private["RERANK_API_KEY"], "caller-secret")
+        self.assertEqual((self.runtime / "stack.env").stat().st_mode & 0o777, 0o600)
+        self.assertNotIn(private["RERANK_API_KEY"], self.output.getvalue())
+
+    def test_enabled_model_is_healthy_before_backend_and_cache_is_external(self):
+        self.invoke("up", "--rerank", "--model-ready-timeout", "42")
+        commands = self.commands()
+        model = next(i for i, command in enumerate(commands) if "up" in command and command[-1] == "reranker")
+        backend = next(i for i, command in enumerate(commands) if "up" in command and command[-1] == "backend")
+        self.assertLess(model, backend)
+        self.assertEqual(commands[model][-7:], ["up", "-d", "--build", "--wait", "--wait-timeout", "42", "reranker"])
+        self.assertIn(["docker", "volume", "create", "magworkspace_reranker-models"], commands)
+        override = (self.runtime / "override.yaml").read_text()
+        self.assertIn("start_period: 42s", override)
+        self.assertIn("reranker-models:\n    external: true", override)
+        self.assertIn("RERANK_ENABLED: 'true'", override)
+        self.assertIn("reranker:8091", json.loads((self.runtime / "endpoints.json").read_text()))
+        self.assertTrue(json.loads((self.runtime / "settings.json").read_text())["rerank"])
+        self.assertIn("Waiting up to 42s", self.output.getvalue())
+
+    def test_model_readiness_failure_never_starts_backend(self):
+        def fail_model(arguments, **kwargs):
+            if "up" in arguments and arguments[-1] == "reranker":
+                raise subprocess.CalledProcessError(1, arguments)
+            return self.fake_execute(arguments, **kwargs)
+        self.execute.side_effect = fail_model
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.invoke("up", "--rerank")
+        self.assertFalse(any("up" in command and command[-1] == "backend" for command in self.commands()))
+        self.assertTrue((self.runtime / "stack.env").exists())
+        self.assertFalse(any("down" in command for command in self.commands()))
+
+    def test_obsolete_or_unknown_chunking_state_cannot_be_reused(self):
+        state = self.runtime / "scifact-state.json"
+        frozen = json.dumps(complete_state())
+        state.write_text(frozen)
+        for arguments in [("up",), ("up", "--chunking-strategy", "structure_v2"),
+                          ("up", "--chunking-strategy", "legacy_v1")]:
+            with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+                self.invoke(*arguments)
+            self.execute.assert_not_called()
+            self.assertEqual(state.read_text(), frozen)
+        (self.runtime / "settings.json").write_text(json.dumps({"observability": False,
+            "execution": "qdrant_native", "chunking_strategy": "legacy_v1"}))
+        with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke("up", "--chunking-strategy", "structure_v2")
+        self.execute.assert_not_called()
+        self.assertEqual(state.read_text(), frozen)
+
+
+    def test_explicit_disable_stops_previous_model_without_removing_cache(self):
+        self.invoke("up", "--infra-only", "--rerank")
+        self.execute.reset_mock()
+        self.invoke("up", "--infra-only", "--no-rerank")
+        self.assertTrue(any(command[-2:] == ["stop", "reranker"] for command in self.commands()))
+        self.assertFalse(any("rm" in command or "down" in command for command in self.commands()))
+        self.assertFalse(json.loads((self.runtime / "settings.json").read_text())["rerank"])
+
+    def test_invalid_ready_timeout_rejected_before_mutation(self):
+        with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            self.invoke("up", "--rerank", "--model-ready-timeout", "0")
+        self.execute.assert_not_called()
+        self.assertEqual(list(self.runtime.iterdir()), [])
+
+
+class RerankerEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        self.module, self.stack = load_orchestrator(), load_stack()
+        self.directory = tempfile.TemporaryDirectory(prefix="mw-rerank-freeze-")
+        self.addCleanup(self.directory.cleanup)
+        self.runtime = Path(self.directory.name)
+        self.config = dict(self.stack.RERANK_DEFAULTS)
+        self.key = "private-synthetic-key-" + "a" * 32
+        (self.runtime / "settings.json").write_text(json.dumps({
+            "rerank": True, "chunking_strategy": "structure_v2", "rerank_configuration": self.config}))
+        (self.runtime / "stack.env").write_text("RERANK_API_KEY=" + self.key + "\n" +
+                                               "".join(key + "=" + value + "\n" for key, value in self.config.items()))
+        (self.runtime / "endpoints.json").write_text(json.dumps({"reranker:8091": "http://127.0.0.1:18091"}))
+        self.info = {"model_id": self.config["RERANK_MODEL"], "model_sha": self.config["RERANK_MODEL_REVISION"],
+                     "model_type": {"reranker": {}}, "auto_truncate": True,
+                     "max_input_length": 512, "max_batch_tokens": 1024, "max_client_batch_size": 200,
+                     "unexpected_private_debug": self.key}
+
+    def read(self, info=None):
+        with patch.object(self.module, "RUNTIME", self.runtime), \
+                patch.object(self.module.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = io.BytesIO(json.dumps(info or self.info).encode())
+            result = self.module.reranker_environment(True)
+            request = opener.return_value.open.call_args.args[0]
+            self.assertEqual(request.get_header("Authorization"), "Bearer " + self.key)
+            self.assertEqual(request.full_url, "http://127.0.0.1:18091/info")
+            return result
+
+    def test_loaded_identity_and_limits_frozen_without_credentials(self):
+        result = self.read()
+        self.assertEqual(result["configuration"], self.config)
+        self.assertEqual(result["loaded_model"]["model_sha"], self.info["model_sha"])
+        self.assertNotIn(self.key, json.dumps(result))
+        self.assertNotIn("unexpected_private_debug", result["loaded_model"])
+
+    def test_wrong_identity_limits_or_settings_reject_before_scoring(self):
+        for field, value in (("model_id", "other"), ("model_sha", "other"), ("auto_truncate", False),
+                             ("model_type", {}), ("max_input_length", 1025),
+                             ("max_batch_tokens", 2048),
+                             ("max_client_batch_size", int(self.config["RERANK_MAX_CANDIDATES"]) - 1)):
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.read({**self.info, field: value})
+        with patch.object(self.module, "RUNTIME", self.runtime), \
+                patch.object(self.module.urllib.request, "build_opener") as opener:
+            with self.assertRaises(ValueError):
+                self.module.reranker_environment(False)
+            opener.assert_not_called()
+
+    def test_baseline_does_not_contact_model(self):
+        (self.runtime / "settings.json").write_text(json.dumps({"rerank": False, "chunking_strategy": "structure_v2"}))
+        with patch.object(self.module, "RUNTIME", self.runtime), \
+                patch.object(self.module.urllib.request, "build_opener") as opener:
+            self.assertEqual(self.module.reranker_environment(False), {"enabled": False, "chunking_strategy": "structure_v2"})
+            opener.assert_not_called()
+
+    def test_scifact_forwards_explicit_mode_and_optional_chunking(self):
+        args = argparse.Namespace(rerank=False, chunking_strategy=None, model_ready_timeout=3600)
+        baseline = self.module.stack_arguments(args)
+        self.assertIn("--no-rerank", baseline)
+        self.assertNotIn("--chunking-strategy", baseline)
+        args.rerank, args.chunking_strategy = True, "structure_v2"
+        enabled = self.module.stack_arguments(args)
+        self.assertIn("--rerank", enabled)
+        self.assertEqual(enabled[-2:], ["--chunking-strategy", "structure_v2"])
+
+    def test_full_orchestrator_forwards_both_rebuilds_without_starting_real_work(self):
+        root = self.runtime / "project"
+        dataset = root / ".cache/datasets/scifact"
+        dataset.mkdir(parents=True)
+        state = complete_state()
+        (dataset / "corpus.jsonl").write_text("".join(json.dumps({"_id": key}) + "\n" for key in state["documents"]))
+        (self.runtime / "scifact-state.json").write_text(json.dumps(state))
+        for enabled in (False, True):
+            with self.subTest(rerank=enabled):
+                output = root / ("enabled" if enabled else "baseline")
+                argv = ["run-scifact.py", "--output", str(output), "--chunking-strategy", "structure_v2"]
+                if enabled:
+                    argv.append("--rerank")
+                with patch.object(self.module, "ROOT", root), patch.object(self.module, "RUNTIME", self.runtime), \
+                        patch.object(sys, "argv", argv), patch.object(self.module, "run") as run, \
+                        patch.object(self.module, "base_url", return_value="http://127.0.0.1:18080"), \
+                        patch.object(self.module, "source_fingerprint", return_value={"source.go": "a" * 64}), \
+                        patch.object(self.module, "application_sha256", return_value="b" * 64), \
+                        patch.object(self.module, "qdrant_environment", return_value={"engine": "qdrant_native"}), \
+                        patch.object(self.module, "reranker_environment", return_value={"enabled": enabled}) as model, \
+                        patch("sys.stdout", io.StringIO()):
+                    self.module.main()
+                startups = [item.args for item in run.call_args_list
+                            if item.args[:2] == ("scripts/evaluation-stack.py", "up")]
+                self.assertEqual(len(startups), 2)
+                for startup in startups:
+                    self.assertIn("--rerank" if enabled else "--no-rerank", startup)
+                    self.assertEqual(startup[-2:], ("--chunking-strategy", "structure_v2"))
+                evaluation = next(item.args for item in run.call_args_list if item.args[:4] == ("-u", "-m", "scripts.retrieval_eval", "run"))
+                self.assertEqual(evaluation[-2:], ("--request-timeout", "125"))
+                self.assertEqual(model.call_args_list, [call(enabled), call(enabled)])
+                self.assertEqual(json.loads((self.runtime / "scifact-state.json").read_text()), state)
+
+
+class AcceptanceBaselineCompatibilityTests(unittest.TestCase):
+    def test_rebuild_old_private_stack_explicitly_disables_model(self):
+        with tempfile.TemporaryDirectory(prefix="mw-acceptance-baseline-") as directory:
+            runtime = Path(directory)
+            (runtime / "private-state.json").write_text(json.dumps({"project": "mw-old-synthetic"}))
+            (runtime / "private.env").write_text("REDIS_PASSWORD=synthetic\nMAGENT_SERVICE_API_KEY=" + "k" * 32 + "\n")
+            (runtime / "override.yaml").write_text("volumes:\n  ollama-models:\n    external: true\n")
+            response = io.BytesIO(b"")
+            response.status = 200
+            with patch.dict(os.environ, {"MAGWORKSPACE_ACCEPTANCE_DIR": directory, "RERANK_ENABLED": "true"}), \
+                    patch.object(sys, "argv", ["acceptance-stack.py", "rebuild"]), \
+                    patch("subprocess.run") as execute, \
+                    patch("subprocess.check_output", return_value="127.0.0.1:18080\n"), \
+                    patch("urllib.request.build_opener") as opener, patch("sys.stdout", io.StringIO()):
+                opener.return_value.open.return_value = response
+                runpy.run_path(str(SCRIPT.with_name("acceptance-stack.py")), run_name="acceptance_baseline_test")
+            override = (runtime / "baseline-rerank.yaml").resolve()
+            self.assertIn("RERANK_ENABLED: 'false'", override.read_text())
+            for invocation in execute.call_args_list:
+                self.assertIn(str(override), invocation.args[0])
+                self.assertNotIn("reranker", invocation.args[0])
 
 
 class QdrantEnvironmentTests(unittest.TestCase):

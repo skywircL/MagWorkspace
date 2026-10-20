@@ -40,7 +40,7 @@ if COMMAND == 'start':
         MINIO_ACCESS_KEY=secrets.token_hex(12), MINIO_SECRET_KEY=secrets.token_hex(24), QDRANT_API_KEY=secrets.token_hex(24), REDIS_PASSWORD=secrets.token_hex(24),
         MAGENT_SERVICE_API_KEY=secrets.token_hex(32), MINIO_BUCKET='magworkspace', MAGENT_MODE='live', MAGENT_TIMEOUT='240s',
         MAGENT_HARNESS_PATH=str(ROOT.parent / 'Magent Harness'), ALLOW_REGISTRATION='true',
-        DOCUMENT_INDEXING_ENABLED='true', EMBEDDING_MODEL='bge-m3:567m', EMBEDDING_DIMENSIONS='1024',
+        DOCUMENT_INDEXING_ENABLED='true', EMBEDDING_MODEL='bge-m3:567m', EMBEDDING_DIMENSIONS='1024', RERANK_ENABLED='false',
         MAGWORKSPACE_MODEL_CACHE_VOLUME='magworkspace_ollama-models')
     for key in ('MAGENT_SERVICE_PORT','REDIS_PORT','MYSQL_PORT','MINIO_PORT','MINIO_CONSOLE_PORT','HTTP_PORT','SEARCH_PORT','QDRANT_PORT','OLLAMA_PORT','TIKA_PORT'):
         configuration[key] = '0'
@@ -68,8 +68,12 @@ if not any(line.startswith('MAGENT_SERVICE_API_KEY=') for line in private_env.re
         output.write('\nMAGENT_SERVICE_PORT=0\nMAGENT_SERVICE_API_KEY=' + secrets.token_hex(32) + '\n')
     os.chmod(private_env, 0o600)
 
+# Keep paid-chat acceptance and old private-state rebuilds as retrieval baselines,
+# even when the calling shell enables reranking for the main application.
+baseline_override = OUT / 'baseline-rerank.yaml'
+baseline_override.write_text("services:\n  backend:\n    environment:\n      RERANK_ENABLED: 'false'\n")
 compose = ['docker','compose','--env-file',str(OUT/'private.env'),'--project-name',state['project'],
-    '--profile','app','-f','compose.yaml','-f',str(OUT/'override.yaml')]
+    '--profile','app','-f','compose.yaml','-f',str(OUT/'override.yaml'),'-f',str(baseline_override)]
 def port(service, internal):
     result = subprocess.check_output(compose + ['port',service,str(internal)], cwd=ROOT, text=True)
     return result.strip().rsplit(':',1)[1]

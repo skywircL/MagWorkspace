@@ -89,7 +89,7 @@ func TestRetrievalExecutionOverlapsHybrid(t *testing.T) {
 	})
 	results := make(chan executionResult, 1)
 	go func() {
-		lexical, vector, err := s.retrieveCandidates(ctx, "workspace", []string{"generation"}, "claim", "hybrid")
+		lexical, vector, err := s.retrieveCandidates(ctx, "workspace", []string{"generation"}, "claim", "hybrid", 100)
 		results <- executionResult{lexical, vector, err}
 	}()
 	// Each branch waits for release. Reaching both starts proves overlap
@@ -115,7 +115,7 @@ func TestRetrievalExecutionBaselineIsSequential(t *testing.T) {
 		}
 		return nil, nil
 	})
-	if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid"); err != nil {
+	if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid", 100); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -135,7 +135,7 @@ func TestRetrievalExecutionFusionParity(t *testing.T) {
 				}
 				return vector, nil
 			})
-			lex, vec, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid")
+			lex, vec, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid", 100)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -180,7 +180,7 @@ func TestRetrievalExecutionLexicalFailureCancelsOtherBranch(t *testing.T) {
 	})
 	results := make(chan executionResult, 1)
 	go func() {
-		lexical, vector, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid")
+		lexical, vector, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid", 100)
 		results <- executionResult{lexical, vector, err}
 	}()
 	if result := awaitExecution(t, results); result.err != lexicalErr {
@@ -203,7 +203,7 @@ func TestRetrievalExecutionFailurePriority(t *testing.T) {
 			}, func(context.Context, string) ([]domain.IndexCandidate, error) {
 				return nil, lexicalErr
 			})
-			if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid"); err != lexicalErr {
+			if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid", 100); err != lexicalErr {
 				t.Fatalf("lexical failure did not take priority: %v", err)
 			}
 		})
@@ -226,7 +226,7 @@ func TestRetrievalExecutionVectorFailureWaitsForLexical(t *testing.T) {
 		}
 		return []domain.IndexCandidate{{ChunkID: "a"}}, nil
 	})
-	if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid"); err != vectorErr {
+	if _, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", "hybrid", 100); err != vectorErr {
 		t.Fatalf("unexpected failure: %v", err)
 	}
 }
@@ -249,7 +249,7 @@ func TestRetrievalExecutionParentCancellation(t *testing.T) {
 	})
 	results := make(chan executionResult, 1)
 	go func() {
-		lexical, vector, err := s.retrieveCandidates(ctx, "workspace", nil, "claim", "hybrid")
+		lexical, vector, err := s.retrieveCandidates(ctx, "workspace", nil, "claim", "hybrid", 100)
 		results <- executionResult{lexical, vector, err}
 	}()
 	awaitStarted(t, started, 2)
@@ -275,7 +275,7 @@ func TestRetrievalExecutionSingleModeAndInvalidEmbedding(t *testing.T) {
 					}
 					return nil, nil
 				})
-				_, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", mode)
+				_, _, err := s.retrieveCandidates(context.Background(), "workspace", nil, "claim", mode, 100)
 				if mode == "lexical" {
 					if err != nil || embeds.Load() != 0 || lexical.Load() != 1 {
 						t.Fatalf("lexical mode called embedding: %v", err)

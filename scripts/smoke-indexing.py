@@ -67,13 +67,31 @@ def ready(path):
 account = request("POST", "/auth/register", {"name": "Index smoke", "email": f"index-{uuid.uuid4().hex}@example.test", "password": uuid.uuid4().hex}, expected=201)
 token = account["token"]
 workspace = "/workspaces/" + account["workspaces"][0]["id"]
-source = ("# 文档知识库\n" + "\n" * 1600 + "工作台通过不可变版本管理个人知识，全文检索和向量检索可以帮助查找资料。\n").encode()
+table = "| 部署方式 | 虚拟机 | 每台配置 |\n| --- | --- | --- |\n| 伪分布式 | 一台 | 两核六GB |\n| 完全分布式 | 三台 | 一核四GB |\n"
+code = "```sh\necho '检查虚拟机内存'\nfree -m\n```\n"
+source = ("# 文档知识库\n" + "\n" * 1600 +
+          "工作台通过不可变版本管理个人知识，全文检索和向量检索可以帮助查找资料。\n\n" +
+          "这是完整的说明句子，文档中的配置需要保留上下文。" * 22 +
+          "\n\n## 推荐配置\n\n" + table + "\n" + code + "\n" +
+          "检查完成后记录结果，并在知识库保存实验说明。" * 26 + "\n").encode()
 try:
     first = upload(workspace + "/documents", source)
     doc = workspace + "/documents/" + first["document"]["id"]
     version = doc + "/versions/" + first["version"]["id"]
     job = ready(version)
     check(request("GET", version + "/content") == source, "original bytes changed")
+    chunks = request("GET", version + "/indexes/" + job["id"] + "/chunks?page_size=100")
+    check(len(chunks) == job["chunk_count"] and chunks[0]["start_byte"] == 0 and
+          chunks[-1]["end_byte"] == len(source), "canonical chunk coverage endpoints changed")
+    for i, item in enumerate(chunks):
+        check(source[item["start_byte"]:item["end_byte"]] == item["content"].encode() and
+              len(item["content"]) <= 800, "chunk is not a bounded exact source slice")
+        if i:
+            check(chunks[i-1]["start_byte"] < item["start_byte"] <= chunks[i-1]["end_byte"] < item["end_byte"],
+                  "chunk coverage has a gap or fails to advance")
+    check(any(table in item["content"] for item in chunks), "fitting Markdown table was fragmented")
+    check(any(code in item["content"] for item in chunks), "fitting fenced code was fragmented")
+    print("PASS: structure_v2 exact byte coverage, bounded chunks, intact Markdown table/code; chunks=" + str(len(chunks)), flush=True)
     chunk = None
     for mode in ("lexical", "vector", "hybrid"):
         result = request("POST", workspace + "/search", {"query": "知识库", "mode": mode, "limit": 5})
@@ -83,6 +101,8 @@ try:
         check(chunk["version_id"] == first["version"]["id"], mode + " returned wrong version")
         check(chunk["source_sha256"] == hashlib.sha256(source).hexdigest(), "source hash mismatch")
         check(chunk["sha256"] == hashlib.sha256(chunk["content"].encode()).hexdigest(), "chunk hash mismatch")
+        configuration = request("POST", workspace + "/search", {"query": "完全分布式 推荐配置", "mode": mode, "limit": 10})
+        check(any(table in hit["chunk"]["content"] for hit in configuration["hits"]), mode + " failed to retrieve the complete configuration table")
     citation = version + "/indexes/" + job["id"] + "/chunks/" + chunk["id"]
     check(request("GET", citation)["content"] == chunk["content"], "citation content mismatch")
     title = "更新后的个人知识库"

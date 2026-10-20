@@ -23,7 +23,7 @@ import (
 const (
 	maxToolRequestBytes  = 256 << 10
 	maxToolResponseBytes = 1 << 20
-	toolRequestTimeout   = 30 * time.Second
+	toolRequestTimeout   = 90 * time.Second
 )
 
 // ToolHandler is bound by the authenticated backend to one caller and run.

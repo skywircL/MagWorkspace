@@ -640,6 +640,8 @@ func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
 			x.search.mu.Lock()
 			x.search.deleteError = false
 			x.search.mu.Unlock()
+			// Failed cleanups now have durable backoff; advance this fixture only.
+			x.expireCleanup(t, failed.Generation)
 			if err := x.service.CleanupOnce(context.Background()); err != nil {
 				t.Fatal(err)
 			}

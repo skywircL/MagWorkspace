@@ -1,8 +1,0 @@
-{
-  "recovered_at": "2026-10-16T12:46:38.998445+00:00",
-  "reason": "Docker Hub anonymous token EOF during redundant image rebuild",
-  "method": "existing frozen image; compose --no-build --pull never; all original benchmark guards retained",
-  "application_image": "sha256:dc1df377edffd1df0461894fbf63764b87dce87f6154efc456a3f0c2351edc59",
-  "application_sha256": "77918ab4d1f615cb8d49d98fdb0e4c86d218290e74be6403c77aef2d59324e62",
-  "source_sha256": "f6e15ee3d65fd3193a850191b003fb277dfe887e444b0a7d71b35e8793ee332e"
-}

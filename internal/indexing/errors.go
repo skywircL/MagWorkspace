@@ -6,7 +6,12 @@ import (
 )
 
 // Failure exposes a bounded diagnostic code, never parser/provider response text.
-type Failure struct{ Code string }
+type Failure struct {
+	Code  string
+	Cause error
+}
+
+func (e *Failure) Unwrap() error { return e.Cause }
 
 func (e *Failure) Error() string { return e.Code }
 

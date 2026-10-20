@@ -11,7 +11,7 @@ import secrets, sys
 values={"MYSQL_PASSWORD":secrets.token_hex(24),"MYSQL_ROOT_PASSWORD":secrets.token_hex(24),
         "MINIO_ACCESS_KEY":secrets.token_hex(12),"MINIO_SECRET_KEY":secrets.token_hex(24),
         "MAGENT_SERVICE_API_KEY":secrets.token_hex(32),"MINIO_BUCKET":"magworkspace","MAGENT_MODE":"demo","MAGENT_API_KEY":"","QDRANT_API_KEY":secrets.token_hex(24),"REDIS_PASSWORD":secrets.token_hex(24),
-        "DOCUMENT_INDEXING_ENABLED":"true","EMBEDDING_MODEL":"bge-m3:567m","EMBEDDING_DIMENSIONS":"1024"}
+        "RERANK_ENABLED":"false","DOCUMENT_INDEXING_ENABLED":"true","CHUNKING_STRATEGY":"structure_v2","EMBEDDING_MODEL":"bge-m3:567m","EMBEDDING_DIMENSIONS":"1024"}
 for key in ("MAGENT_SERVICE_PORT", "REDIS_PORT", "MYSQL_PORT","MINIO_PORT","MINIO_CONSOLE_PORT","HTTP_PORT","SEARCH_PORT","QDRANT_PORT","OLLAMA_PORT","TIKA_PORT"):
     values[key]="0"
 with open(sys.argv[1],"w") as f:
@@ -30,6 +30,18 @@ volumes:
     external: true
     name: ${MAGWORKSPACE_MODEL_CACHE_VOLUME}
 YAML
+# Optional copied source context with a local Go module cache, for offline
+# builds. It changes only this disposable test project, not application images.
+if [ -n "${MAGWORKSPACE_TEST_BACKEND_CONTEXT:-}" ]; then
+  python3 - "$override" "$MAGWORKSPACE_TEST_BACKEND_CONTEXT" <<'PY'
+import json, pathlib, sys
+context = pathlib.Path(sys.argv[2]).resolve(strict=True)
+if not (context / "Dockerfile").is_file():
+    raise SystemExit("test backend context must contain a Dockerfile")
+with open(sys.argv[1], "a") as output:
+    output.write("\nservices:\n  backend:\n    build:\n      context: " + json.dumps(str(context)) + "\n")
+PY
+fi
 compose() { docker compose --env-file "$envfile" --project-name "$stack" --profile app -f compose.yaml -f "$override" "$@"; }
 cleanup() { compose down --volumes --remove-orphans >/dev/null 2>&1 || true; rm -f "$envfile" "$override"; }
 trap cleanup EXIT HUP INT TERM

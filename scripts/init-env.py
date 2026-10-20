@@ -12,6 +12,7 @@ text = text.replace("replace-with-minio-secret-key", secrets.token_hex(24))
 text = text.replace("replace-with-qdrant-api-key", secrets.token_hex(24))
 text = text.replace("replace-with-redis-password", secrets.token_hex(24))
 text = text.replace("replace-with-harness-service-key", secrets.token_hex(32))
+text = text.replace("replace-with-reranker-api-key", secrets.token_hex(32))
 descriptor = os.open(root / ".env", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(descriptor, "w") as output:
     output.write(text)

@@ -101,3 +101,14 @@ func (s *Store) CompleteIndexCleanup(ctx context.Context, id string) error {
 	_, err := s.pool.ExecContext(ctx, `DELETE FROM index_cleanup WHERE id=?`, id)
 	return dbError(err)
 }
+
+// DeferIndexCleanup lets other eligible generations progress after a failed
+// cleanup. The identity is an acknowledgement token: a late failure must not
+// postpone a newer request that rotated it, nor shorten its protection window.
+func (s *Store) DeferIndexCleanup(ctx context.Context, id string, delay time.Duration) error {
+	if !validHexID(id) || delay.Microseconds() <= 0 {
+		return domain.ErrInvalid
+	}
+	_, err := s.pool.ExecContext(ctx, `UPDATE index_cleanup SET not_before=GREATEST(not_before,DATE_ADD(UTC_TIMESTAMP(6),INTERVAL ? MICROSECOND)) WHERE id=?`, delay.Microseconds(), id)
+	return dbError(err)
+}
