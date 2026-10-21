@@ -4,9 +4,10 @@ import "time"
 
 const (
 	MaxExtractedBytes = 1 << 20
-	MaxIndexChunks    = 2048
-	ChunkRunes        = 800
-	ChunkOverlapRunes = 100
+	MaxIndexChunks    = 8192
+	ChunkRunes        = 384
+	ChunkOverlapRunes = 76
+	ParentChunkRunes  = 4096
 )
 
 // IndexProfile identifies every input that can affect derived text or vectors.
@@ -24,37 +25,41 @@ type IndexProgress struct {
 }
 
 type IndexJob struct {
-	Progress       *IndexProgress `json:"progress,omitempty"`
-	ID             string         `json:"id"`
-	WorkspaceID    string         `json:"workspace_id"`
-	DocumentID     string         `json:"document_id"`
-	VersionID      string         `json:"version_id"`
-	ProfileID      string         `json:"profile_id"`
-	SourceSHA256   string         `json:"source_sha256"`
-	Status         string         `json:"status"`
-	ErrorCode      string         `json:"error_code,omitempty"`
-	Attempts       int            `json:"attempts"`
-	Generation     string         `json:"generation,omitempty"`
-	CreatedBy      string         `json:"created_by"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
-	ArtifactKey    string         `json:"-"`
-	ArtifactSHA256 string         `json:"-"`
-	ChunkCount     int            `json:"chunk_count"`
+	Progress     *IndexProgress `json:"progress,omitempty"`
+	ID           string         `json:"id"`
+	WorkspaceID  string         `json:"workspace_id"`
+	DocumentID   string         `json:"document_id"`
+	VersionID    string         `json:"version_id"`
+	ProfileID    string         `json:"profile_id"`
+	SourceSHA256 string         `json:"source_sha256"`
+	Status       string         `json:"status"`
+	ErrorCode    string         `json:"error_code,omitempty"`
+	Attempts     int            `json:"attempts"`
+	Generation   string         `json:"generation,omitempty"`
+	CreatedBy    string         `json:"created_by"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	FinishedAt   *time.Time     `json:"finished_at,omitempty"`
+	ChunkCount   int            `json:"chunk_count"`
+	ParentCount  int            `json:"parent_count"`
 }
 
 type IndexChunk struct {
-	ID           string `json:"id"`
-	IndexID      string `json:"index_id"`
-	DocumentID   string `json:"document_id"`
-	VersionID    string `json:"version_id"`
-	SourceSHA256 string `json:"source_sha256"`
-	Ordinal      int    `json:"ordinal"`
-	StartByte    int    `json:"start_byte"`
-	EndByte      int    `json:"end_byte"`
-	Content      string `json:"content"`
-	SHA256       string `json:"sha256"`
+	Kind          string `json:"kind"`
+	ParentID      string `json:"parent_id,omitempty"`
+	ParentOrdinal int    `json:"-"`
+	Generation    string `json:"generation"`
+	ContextHeader string `json:"context_header,omitempty"`
+	ID            string `json:"id"`
+	IndexID       string `json:"index_id"`
+	DocumentID    string `json:"document_id"`
+	VersionID     string `json:"version_id"`
+	SourceSHA256  string `json:"source_sha256"`
+	Ordinal       int    `json:"ordinal"`
+	StartByte     int    `json:"start_byte"`
+	EndByte       int    `json:"end_byte"`
+	Content       string `json:"content"`
+	SHA256        string `json:"sha256"`
 }
 
 type IndexInput struct {
@@ -75,12 +80,21 @@ type IndexReference struct {
 }
 
 type SearchHit struct {
-	Chunk                    IndexChunk `json:"chunk"`
-	Title                    string     `json:"title"`
-	Score                    float64    `json:"score"`
-	RetrievalScore           *float64   `json:"retrieval_score,omitempty"`
-	RerankScore              *float64   `json:"rerank_score,omitempty"`
-	NormalizedRetrievalScore *float64   `json:"normalized_retrieval_score,omitempty"`
+	Focus                    *ChunkSpan  `json:"-"`
+	Parent                   *IndexChunk `json:"-"`
+	MatchedChildIDs          []string    `json:"matched_child_ids,omitempty"`
+	Chunk                    IndexChunk  `json:"chunk"`
+	Title                    string      `json:"title"`
+	Score                    float64     `json:"score"`
+	RetrievalScore           *float64    `json:"retrieval_score,omitempty"`
+	RerankScore              *float64    `json:"rerank_score,omitempty"`
+	NormalizedRetrievalScore *float64    `json:"normalized_retrieval_score,omitempty"`
+}
+
+// ChunkSpan is an exact UTF-8 byte range within canonical parsed text.
+type ChunkSpan struct {
+	StartByte int `json:"start_byte"`
+	EndByte   int `json:"end_byte"`
 }
 
 type IndexCleanup struct {

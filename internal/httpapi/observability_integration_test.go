@@ -20,6 +20,7 @@ import (
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
 	"magworkspace/internal/observability"
+	"magworkspace/internal/reranking"
 	"magworkspace/internal/store"
 )
 
@@ -227,12 +228,12 @@ func TestHTTPOptimizedRetrievalMatchesBaselineAndScope(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "optimizedparity")
 	outsider := x.register(t, "optimizedforeign")
-	write := x.upload(t, owner, strings.Repeat("知识库可信内容及排序。", 120))
+	write := x.upload(t, owner, strings.Repeat("知识库可信内容及排序。", 500))
 	x.process(t)
 	x.upload(t, outsider, "foreign-optimized-secret")
 	x.process(t)
 	// Return every workspace's hints, deliberately ignoring the provider-side
-	// filter. Both strategies must use the same authorized database/manifest
+	// filter. Both strategies must use the same authorized SQL chunk
 	// chain and suppress the foreign document before producing results.
 	writes, _, _ := x.search.snapshot()
 	var candidates []domain.IndexCandidate
@@ -259,7 +260,7 @@ func TestHTTPOptimizedRetrievalMatchesBaselineAndScope(t *testing.T) {
 
 func TestHTTPOptimizedRetrievalRevalidatesAfterExternalIO(t *testing.T) {
 	for _, strategy := range []string{"baseline", "optimized"} {
-		for _, boundary := range []string{"search", "manifest"} {
+		for _, boundary := range []string{"search", "rerank"} {
 			for _, change := range []string{"revoke", "new_head", "delete"} {
 				t.Run(strategy+"/"+boundary+"/"+change, func(t *testing.T) {
 					x := newIndexFixture(t)
@@ -282,12 +283,12 @@ func TestHTTPOptimizedRetrievalRevalidatesAfterExternalIO(t *testing.T) {
 							return candidates, nil
 						})
 					} else {
-						x.objects.readHook(func(ctx context.Context, key string) error {
-							if strings.HasPrefix(key, "indexes/") {
-								return indexGate(ctx, entered, release)
+						attachIntegrationReranker(t, x, integrationReranker(func(ctx context.Context, _ string, passages []string) ([]reranking.Score, error) {
+							if err := indexGate(ctx, entered, release); err != nil {
+								return nil, err
 							}
-							return nil
-						})
+							return rerankScores(passages, .9), nil
+						}))
 					}
 					result := make(chan integrationResponse, 1)
 					go func() {

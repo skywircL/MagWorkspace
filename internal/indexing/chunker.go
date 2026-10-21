@@ -23,17 +23,23 @@ const (
 	boundarySection   uint8 = 1 << 5
 )
 
-// Split preserves canonical parser bytes. Structure is used only to select
-// spans; headings, table headers, and whitespace are never copied or removed.
+// Split returns the retrievable children of the current parent-child strategy.
 func Split(text string) ([]domain.IndexChunk, error) {
+	_, children, err := SplitParentChild(text)
+	return children, err
+}
+
+// SplitParentChild preserves canonical parser bytes at both levels. Parents
+// provide context; only their smaller children are embedded and retrieved.
+func SplitParentChild(text string) (parents, children []domain.IndexChunk, err error) {
 	if len(text) > domain.MaxExtractedBytes {
-		return nil, &Failure{Code: "extraction_limit"}
+		return nil, nil, &Failure{Code: "extraction_limit"}
 	}
 	if !validParserText(text) {
-		return nil, &Failure{Code: "invalid_text"}
+		return nil, nil, &Failure{Code: "invalid_text"}
 	}
 	if strings.TrimSpace(text) == "" {
-		return nil, &Failure{Code: "empty_document"}
+		return nil, nil, &Failure{Code: "empty_document"}
 	}
 	runes := []rune(text)
 	offsets := make([]int, 0, len(runes)+1)
@@ -41,23 +47,50 @@ func Split(text string) ([]domain.IndexChunk, error) {
 		offsets = append(offsets, offset)
 	}
 	offsets = append(offsets, len(text))
-	boundaries := chunkBoundaries(text, runes, offsets)
-	if chunks := splitStructured(text, offsets, boundaries, false); chunks != nil {
-		return chunks, nil
+	parentBoundaries := chunkBoundaries(text, runes, offsets, domain.ParentChunkRunes)
+	childBoundaries := chunkBoundaries(text, runes, offsets, domain.ChunkRunes)
+	parents = splitStructured(text, offsets, parentBoundaries, domain.ParentChunkRunes, 0, false)
+	if parents == nil {
+		parents = splitStructured(text, offsets, parentBoundaries, domain.ParentChunkRunes, 0, true)
 	}
-	// An adversarial document can contain more fitting code blocks/sections
-	// than the global chunk cap permits. A second, dense pass relaxes block
-	// protection rather than rejecting text that the old splitter accepted.
-	// Each non-final dense chunk advances >=600 runes, so 1 MiB fits the cap.
-	return splitStructured(text, offsets, boundaries, true), nil
+	parentStart := 0
+	for i := range parents {
+		parent := &parents[i]
+		parent.Kind = "parent"
+		parent.ParentOrdinal = -1
+		parentEnd := parentStart + utf8.RuneCountInString(parent.Content)
+		// Keep document-wide code/table state even if a parent begins inside
+		// an oversized block. Byte offsets remain relative to the source.
+		localOffsets := offsets[parentStart : parentEnd+1]
+		localBoundaries := childBoundaries[parentStart : parentEnd+1]
+		subs := splitStructured(text, localOffsets, localBoundaries, domain.ChunkRunes, domain.ChunkOverlapRunes, false)
+		if subs == nil {
+			subs = splitStructured(text, localOffsets, localBoundaries, domain.ChunkRunes, domain.ChunkOverlapRunes, true)
+		}
+		if len(subs) == 0 || len(parents)+len(children)+len(subs) > domain.MaxIndexChunks {
+			return nil, nil, &Failure{Code: "extraction_limit"}
+		}
+		for _, child := range subs {
+			child.Ordinal = len(children)
+			child.Kind = "child"
+			child.ParentOrdinal = i
+			children = append(children, child)
+		}
+		parentStart = parentEnd
+	}
+	if len(parents) == 0 {
+		return nil, nil, &Failure{Code: "extraction_limit"}
+	}
+	assignContextHeaders(text, parents, children)
+	return parents, children, nil
 }
 
-func splitStructured(text string, offsets []int, boundaries []uint8, dense bool) []domain.IndexChunk {
+func splitStructured(text string, offsets []int, boundaries []uint8, size, overlap int, dense bool) []domain.IndexChunk {
 	runes := len(offsets) - 1
-	chunks := make([]domain.IndexChunk, 0, runes/domain.ChunkRunes+1)
+	chunks := make([]domain.IndexChunk, 0, runes/size+1)
 	previousEnd := 0
 	for start := 0; start < runes; {
-		end := min(start+domain.ChunkRunes, runes)
+		end := min(start+size, runes)
 		if end < runes {
 			if !dense {
 				// Retreat to the start of a fitting protected block. This can
@@ -69,9 +102,9 @@ func splitStructured(text string, offsets []int, boundaries []uint8, dense bool)
 					return nil // Overlapping protections exceed this chunk's budget.
 				}
 			}
-			minimum := start + domain.ChunkRunes/2
+			minimum := start + size/2
 			if dense {
-				minimum = start + domain.ChunkRunes - domain.ChunkOverlapRunes
+				minimum = start + size - overlap
 			}
 			minimum = max(minimum, previousEnd+1)
 			best, rank := end, uint8(0)
@@ -99,7 +132,7 @@ func splitStructured(text string, offsets []int, boundaries []uint8, dense bool)
 			break
 		}
 		previousEnd = end
-		start = semanticOverlap(boundaries, start, end)
+		start = semanticOverlap(boundaries, start, end, overlap)
 	}
 	return chunks
 }
@@ -107,11 +140,11 @@ func splitStructured(text string, offsets []int, boundaries []uint8, dense bool)
 // A repeated suffix must start at a complete sentence or paragraph boundary.
 // Long sentences/rows without such a suffix simply have zero overlap; a fixed
 // window would otherwise introduce truncated sentences and partial table rows.
-func semanticOverlap(boundaries []uint8, start, end int) int {
+func semanticOverlap(boundaries []uint8, start, end, overlap int) int {
 	if boundaries[end]&(boundaryProtected|boundarySection) != 0 {
 		return end
 	}
-	minimum := max(start+1, end-domain.ChunkOverlapRunes)
+	minimum := max(start+1, end-overlap)
 	for pos := end - 1; pos >= minimum; pos-- {
 		if boundaries[pos]&(boundaryProtected|boundarySection) != 0 {
 			minimum = pos + 1
@@ -132,7 +165,7 @@ func setChunkBoundary(boundaries []uint8, pos int, rank uint8) {
 	}
 }
 
-func chunkBoundaries(text string, runes []rune, offsets []int) []uint8 {
+func chunkBoundaries(text string, runes []rune, offsets []int, size int) []uint8 {
 	boundaries := make([]uint8, len(runes)+1)
 	for i := 0; i < len(runes); i++ {
 		if unicode.IsSpace(runes[i]) {
@@ -171,7 +204,7 @@ func chunkBoundaries(text string, runes []rune, offsets []int) []uint8 {
 		}
 		setChunkBoundary(boundaries, end, boundarySentence)
 	}
-	markChunkStructure(text, runes, offsets, boundaries)
+	markChunkStructure(text, runes, offsets, boundaries, size)
 	return boundaries
 }
 
@@ -221,7 +254,7 @@ func nextChunkLine(runes []rune, start int) chunkLine {
 	return chunkLine{start, end, next}
 }
 
-func markChunkStructure(text string, runes []rune, offsets []int, boundaries []uint8) {
+func markChunkStructure(text string, runes []rune, offsets []int, boundaries []uint8, size int) {
 	var fence rune
 	fenceCount, fenceStart := 0, 0
 	tableStart, tableEnd := -1, 0
@@ -235,14 +268,14 @@ func markChunkStructure(text string, runes []rune, offsets []int, boundaries []u
 		if fence != 0 {
 			keepCodeLineBoundary(boundaries, line.next)
 			if marker == fence && count >= fenceCount && closing {
-				markProtectedChunk(boundaries, fenceStart, line.next, true)
+				markProtectedChunk(boundaries, fenceStart, line.next, true, size)
 				fence = 0
 			}
 			pos = line.next
 			continue
 		}
 		if tableStart >= 0 && (!strings.ContainsRune(trimmed, '|') || trimmed == "" || marker != 0) {
-			markProtectedChunk(boundaries, tableStart, tableEnd, true)
+			markProtectedChunk(boundaries, tableStart, tableEnd, true, size)
 			tableStart = -1
 		}
 		if marker != 0 {
@@ -256,7 +289,7 @@ func markChunkStructure(text string, runes []rune, offsets []int, boundaries []u
 		} else if isChunkHeading(trimmed) {
 			setChunkBoundary(boundaries, line.start, boundaryHeading)
 			boundaries[line.start] |= boundarySection
-			markProtectedChunk(boundaries, line.start, headingBodyEnd(text, runes, offsets, line), false)
+			markProtectedChunk(boundaries, line.start, headingBodyEnd(text, runes, offsets, line, size), false, size)
 			// A heading's newline is not a useful chunk end. Its following
 			// body should travel with it whenever the size budget allows.
 			boundaries[line.next] &= ^boundaryRankMask
@@ -265,10 +298,10 @@ func markChunkStructure(text string, runes []rune, offsets []int, boundaries []u
 		pos = line.next
 	}
 	if fence != 0 {
-		markProtectedChunk(boundaries, fenceStart, len(runes), true)
+		markProtectedChunk(boundaries, fenceStart, len(runes), true, size)
 	}
 	if tableStart >= 0 {
-		markProtectedChunk(boundaries, tableStart, tableEnd, true)
+		markProtectedChunk(boundaries, tableStart, tableEnd, true, size)
 	}
 }
 
@@ -282,7 +315,7 @@ func keepCodeLineBoundary(boundaries []uint8, pos int) {
 // blank lines, which otherwise create a high-priority cut just after the title.
 // Separate code/table protection owns those blocks so overlapping protections
 // cannot accidentally require a span larger than the hard limit.
-func headingBodyEnd(text string, runes []rune, offsets []int, heading chunkLine) int {
+func headingBodyEnd(text string, runes []rune, offsets []int, heading chunkLine, size int) int {
 	start := heading.next
 	for start < len(runes) && unicode.IsSpace(runes[start]) {
 		start++
@@ -297,19 +330,19 @@ func headingBodyEnd(text string, runes []rune, offsets []int, heading chunkLine)
 		return heading.next
 	}
 	end := body.next
-	if end-heading.start > domain.ChunkRunes {
+	if end-heading.start > size {
 		end = min(body.end, start+64)
 	}
-	if end-heading.start > domain.ChunkRunes {
+	if end-heading.start > size {
 		return heading.next
 	}
 	return end
 }
 
-func markProtectedChunk(boundaries []uint8, start, end int, block bool) {
+func markProtectedChunk(boundaries []uint8, start, end int, block bool, size int) {
 	for pos := start; pos <= end; pos++ {
 		boundaries[pos] |= boundaryProtected
-		if pos > start && pos < end && end-start <= domain.ChunkRunes {
+		if pos > start && pos < end && end-start <= size {
 			boundaries[pos] |= boundaryNoCut
 		}
 		if block && pos > start && pos < end && boundaries[pos]&boundaryRankMask == boundarySentence {

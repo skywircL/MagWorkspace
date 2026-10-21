@@ -17,7 +17,10 @@ import urllib.error
 import urllib.request
 
 MAX_REQUEST = 256 << 10
-MAX_RESPONSE = 1 << 20
+# Keep in sync with Go maxToolResponseBytes. Restoring 64 parents needs at most
+# 64 * (4096 * 6 + 255 * 6 + 1024) bytes plus the wrapper: six-byte JSON escapes
+# bound each source rune/title byte, with 1 KiB per item for fixed metadata.
+MAX_RESPONSE = 2 << 20
 
 
 class RetrievalError(ValueError):

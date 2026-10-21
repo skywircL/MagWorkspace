@@ -23,8 +23,11 @@ func assertChunkCoverage(t *testing.T, text string, chunks []domain.IndexChunk) 
 		if chunk.Ordinal != i || chunk.StartByte < 0 || chunk.EndByte <= chunk.StartByte || chunk.EndByte > len(text) || chunk.Content != text[chunk.StartByte:chunk.EndByte] || !utf8.ValidString(chunk.Content) || utf8.RuneCountInString(chunk.Content) > domain.ChunkRunes {
 			t.Fatalf("invalid byte span or rune boundary: %+v", chunk)
 		}
-		if chunk.ID != "" || chunk.IndexID != "" || chunk.DocumentID != "" || chunk.VersionID != "" || chunk.SourceSHA256 != "" {
+		if chunk.ID != "" || chunk.IndexID != "" || chunk.DocumentID != "" || chunk.VersionID != "" || chunk.SourceSHA256 != "" || chunk.ParentID != "" || chunk.Generation != "" {
 			t.Fatal("chunker invented storage or source identity")
+		}
+		if chunk.Kind != "child" || chunk.ParentOrdinal < 0 {
+			t.Fatal("retrievable chunk lacks its parent association")
 		}
 		digest := sha256.Sum256([]byte(chunk.Content))
 		if chunk.SHA256 != hex.EncodeToString(digest[:]) {
@@ -76,9 +79,9 @@ func TestChunkerPrefersNearbyParagraphAndLineBoundaries(t *testing.T) {
 		text     string
 		firstEnd int
 	}{
-		{strings.Repeat("a", 730) + "\n\n" + strings.Repeat("b", 38) + "\n" + strings.Repeat("c", 1000), 732},
-		{strings.Repeat("中", 750) + "\n" + strings.Repeat("🙂", 1000), 750*3 + 1},
-		{strings.Repeat("a", 300) + "\n\n" + strings.Repeat("b", 1000), domain.ChunkRunes},
+		{strings.Repeat("a", 330) + "\n\n" + strings.Repeat("b", 18) + "\n" + strings.Repeat("c", 1000), 332},
+		{strings.Repeat("中", 350) + "\n" + strings.Repeat("🙂", 1000), 350*3 + 1},
+		{strings.Repeat("a", 150) + "\n\n" + strings.Repeat("b", 1000), domain.ChunkRunes},
 	} {
 		chunks, err := indexing.Split(test.text)
 		if err != nil {
@@ -137,7 +140,7 @@ func TestChunkerSentenceBoundariesAndSemanticOverlap(t *testing.T) {
 }
 
 func TestChunkerPrefersSentenceOverPDFSoftWrap(t *testing.T) {
-	prefix := strings.Repeat("甲", 500) + "。\n"
+	prefix := strings.Repeat("甲", 250) + "。\n"
 	text := prefix + strings.Repeat("乙", 100) + "\n" + strings.Repeat("丙", 100) + "\n" + strings.Repeat("丁", 500) + "。"
 	chunks, err := indexing.Split(text)
 	if err != nil {
@@ -151,7 +154,7 @@ func TestChunkerPrefersSentenceOverPDFSoftWrap(t *testing.T) {
 
 func TestChunkerKeepsHeadingWithBodyAndResetsOverlap(t *testing.T) {
 	for _, heading := range []string{"# 内存与配置\n", "## Deployment\n", "第一章 安装部署\n", "第2节 推荐配置\n"} {
-		prefix := strings.Repeat("前文说明。", 120) + "\n\n"
+		prefix := strings.Repeat("前文说明。", 50) + "\n\n"
 		text := prefix + heading + strings.Repeat("配置说明需要与标题一起保留。", 100)
 		chunks, err := indexing.Split(text)
 		if err != nil {
@@ -171,7 +174,7 @@ func TestChunkerProtectsFencesAndTablesWithoutSyntheticContent(t *testing.T) {
 		"| 方式 | 内存 |\n| :--- | ---: |\n" + strings.Repeat("| 完全分布式 | 4 GB |\n", 18),
 	}
 	for _, block := range blocks {
-		prefix := strings.Repeat("a", 650) + "\n\n"
+		prefix := strings.Repeat("a", 250) + "\n\n"
 		text := prefix + block + "\n" + strings.Repeat("尾部说明。", 220)
 		chunks, err := indexing.Split(text)
 		if err != nil {
@@ -218,7 +221,7 @@ func TestChunkerOversizedProtectedBlocksRespectHardLimit(t *testing.T) {
 
 func TestChunkerDoesNotTreatURLPunctuationAsSentences(t *testing.T) {
 	for _, punctuation := range []string{"?", ";", "!"} {
-		text := strings.Repeat("x", 600) + "https://example.test/path" + punctuation + strings.Repeat("tenant=value", 50)
+		text := strings.Repeat("x", 250) + "https://example.test/path" + punctuation + strings.Repeat("tenant=value", 50)
 		chunks, err := indexing.Split(text)
 		if err != nil {
 			t.Fatal(err)
@@ -231,10 +234,9 @@ func TestChunkerDoesNotTreatURLPunctuationAsSentences(t *testing.T) {
 }
 
 func TestChunkerPacksTinySectionsAndBoundsAdversarialInput(t *testing.T) {
-	// A fitting 800-rune fence separated by 20 bytes of prose requires more
-	// than 2,048 chunks if every block is always protected. Dense fallback
-	// must keep full byte coverage and the global cap on this valid input.
-	fullFence := "```\n" + strings.Repeat("x", 791) + "\n```\n"
+	// Fitting protected blocks alternate with short prose. Both levels must
+	// keep complete byte coverage within the global parent-plus-child cap.
+	fullFence := "```\n" + strings.Repeat("x", domain.ChunkRunes-9) + "\n```\n"
 	for _, sample := range []string{"# x\nx\n", "a\n\n", fullFence + strings.Repeat("p", 19) + "\n", "\n"} {
 		text := "x" + strings.Repeat(sample, domain.MaxExtractedBytes/len(sample)+1)
 		text = text[:domain.MaxExtractedBytes]
@@ -271,37 +273,12 @@ func TestChunkerHeadingBlankLinesDoNotOrphanTitle(t *testing.T) {
 }
 
 func TestChunkerAdjacentHeadingAndFullSizeFenceMakeProgress(t *testing.T) {
-	text := "# Heading\n" + "```\n" + strings.Repeat("x", 791) + "\n```\n" + strings.Repeat(" tail", 400)
+	text := "# Heading\n" + "```\n" + strings.Repeat("x", domain.ChunkRunes-9) + "\n```\n" + strings.Repeat(" tail", 400)
 	chunks, err := indexing.Split(text)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertChunkCoverage(t, text, chunks)
-}
-
-func TestChunkerLegacyKeepsFrozenOffsetsAndFixedOverlap(t *testing.T) {
-	for _, text := range []string{
-		strings.Repeat("中", 2000),
-		strings.Repeat("a", 730) + "\n\n" + strings.Repeat("b", 2000),
-		strings.Repeat("段落🙂\n\n", 500),
-	} {
-		chunks, err := indexing.SplitWithStrategy(text, indexing.ChunkingLegacy)
-		if err != nil {
-			t.Fatal(err)
-		}
-		assertChunkCoverage(t, text, chunks)
-		for i := 1; i < len(chunks); i++ {
-			if utf8.RuneCountInString(text[chunks[i].StartByte:chunks[i-1].EndByte]) != 100 {
-				t.Fatal("legacy overlap changed")
-			}
-		}
-		if strings.HasPrefix(text, "中") && (chunks[0].EndByte != 2400 || chunks[1].StartByte != 2100 || chunks[1].EndByte != 4500) {
-			t.Fatal("legacy UTF-8 byte boundaries changed")
-		}
-		if strings.HasPrefix(text, "a") && (chunks[0].EndByte != 732 || chunks[1].StartByte != 632) {
-			t.Fatal("legacy paragraph preference changed")
-		}
-	}
 }
 
 func TestChunkerRandomizedCoverage(t *testing.T) {

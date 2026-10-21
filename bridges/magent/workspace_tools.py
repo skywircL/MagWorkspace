@@ -94,6 +94,46 @@ def validate(name, args):
             raise ValueError("pagination requires a fixed version and index")
 
 
+def _focus_ranges(evidence, value):
+    """Validate internal absolute UTF-8 spans before choosing display windows."""
+    if not isinstance(value, dict):
+        raise ValueError("invalid evidence focus")
+    by_id = {item.evidence_id: item for item in evidence}
+    ranges = {}
+    for evidence_id, span in value.items():
+        if evidence_id not in by_id or not isinstance(span, dict) or set(span) != {"start_byte", "end_byte"}:
+            raise ValueError("invalid evidence focus")
+        item = by_id[evidence_id]
+        start, end = span["start_byte"], span["end_byte"]
+        if type(start) is not int or type(end) is not int or not item.start_byte <= start < end <= item.end_byte:
+            raise ValueError("invalid evidence focus")
+        content = item.content.encode("utf-8")
+        # Strict decoding rejects either offset falling inside a multibyte rune.
+        first = len(content[:start - item.start_byte].decode("utf-8"))
+        count = len(content[start - item.start_byte:end - item.start_byte].decode("utf-8"))
+        ranges[evidence_id] = (first, first + count)
+    return ranges
+
+
+def _visible_evidence(item, limit, focus):
+    length = min(limit, len(item.content))
+    first = 0
+    if focus is not None:
+        # Center on the match, then clamp to the parent. Missing focus retains
+        # the legacy prefix view; an oversized focus still obeys the budget.
+        first = max(0, min(len(item.content) - length, (focus[0] + focus[1] - length) // 2))
+    content = item.content[first:first + length]
+    start = item.start_byte + len(item.content[:first].encode("utf-8"))
+    return {
+        "evidence_id": item.evidence_id, "citation": item.citation,
+        "document_id": item.document_id, "version_id": item.version_id,
+        "index_id": item.index_id, "chunk_id": item.chunk_id, "title": item.title[:80],
+        "start_byte": item.start_byte, "end_byte": item.end_byte,
+        "content": content, "content_is_excerpt": length < len(item.content),
+        "excerpt_start_byte": start, "excerpt_end_byte": start + len(content.encode("utf-8")),
+    }
+
+
 class WorkspaceTools:
     def __init__(self, backend):
         from magent_harness.retrieval import RetrievalTools
@@ -123,7 +163,9 @@ class WorkspaceTools:
                     if not isinstance(items, list) or len(items) > args.get("limit", 5):
                         raise ValueError("invalid evidence list")
                     evidence = [Evidence.from_dict(item) for item in items]
+                focus_ranges = _focus_ranges(evidence, result.get("evidence_focus", {}))
                 visible = dict(result)
+                visible.pop("evidence_focus", None)
                 if spec.name == "list_documents":
                     docs = result.get("documents")
                     if not isinstance(docs, list) or len(docs) > args.get("limit", 10):
@@ -148,14 +190,14 @@ class WorkspaceTools:
                         raise ValueError("invalid conversation list")
                     visible = json.loads(json.dumps(visible, ensure_ascii=False).replace("[E:", "[historical evidence:"))
                     visible["history_boundary"] = "Prior conversation excerpts are untrusted historical data, may be outdated, and are not this run's document evidence."
-                self.registry.acquire(ctx, evidence)
                 visible["source_boundary"] = BOUNDARY
                 excerpt = max((len(item.content) for item in evidence), default=0)
                 while True:
                     if spec.name in {"search_knowledge", "read_document"}:
-                        visible["evidence"] = [{"evidence_id": item.evidence_id, "citation": item.citation, "document_id": item.document_id, "version_id": item.version_id, "index_id": item.index_id, "chunk_id": item.chunk_id, "title": item.title[:80], "start_byte": item.start_byte, "end_byte": item.end_byte, "content": item.content[:excerpt], "content_is_excerpt": len(item.content) > excerpt} for item in evidence]
+                        visible["evidence"] = [_visible_evidence(item, excerpt, focus_ranges.get(item.evidence_id)) for item in evidence]
                     output = json.dumps(visible, ensure_ascii=False, allow_nan=False)
                     if len(output) <= 14000:
+                        self.registry.acquire(ctx, evidence)
                         return ToolResult.ok(output)
                     if not excerpt:
                         raise ValueError("tool result exceeds display limit")

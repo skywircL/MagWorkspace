@@ -83,7 +83,7 @@ def main():
     p.add_argument("--execution", choices=("qdrant_native",))
     p.add_argument("--rerank", action=argparse.BooleanOptionalAction, default=None,
                    help="enable local reranking; new stacks default to disabled, existing settings are retained")
-    p.add_argument("--chunking-strategy", choices=("structure_v2",),
+    p.add_argument("--chunking-strategy", choices=("parent_child_v1",),
                    help="chunking strategy for a new, empty evaluation stack")
     p.add_argument("--model-ready-timeout", type=int, default=3600,
                    help="maximum seconds waiting for a requested reranker to download/load (default 3600)")
@@ -98,9 +98,9 @@ def main():
     if args.rerank is not None:
         settings["rerank"] = args.rerank
     strategy = settings.get("chunking_strategy", values.get("CHUNKING_STRATEGY"))
-    if args.action == "up" and (strategy not in (None, "structure_v2") or
+    if args.action == "up" and (strategy not in (None, "parent_child_v1") or
             (strategy is None and (RUNTIME / "scifact-state.json").exists())):
-        p.error("obsolete or unknown chunking state; clear old evaluation data before structure_v2")
+        p.error("obsolete or unknown chunking state; clear old evaluation data before parent_child_v1")
     if args.chunking_strategy:
         if strategy and args.chunking_strategy != strategy and (RUNTIME / "scifact-state.json").exists():
             p.error("existing ingestion state has another chunking strategy; use a new evaluation runtime")
@@ -108,9 +108,9 @@ def main():
     if strategy is None and args.action == "up":
         if (RUNTIME / "scifact-state.json").exists():
             p.error("existing ingestion state lacks a recorded chunking strategy; pass --chunking-strategy explicitly")
-        strategy = "structure_v2"
+        strategy = "parent_child_v1"
     if strategy is not None:
-        if strategy not in ("legacy_v1", "structure_v2"):
+        if strategy not in ("legacy_v1", "parent_child_v1"):
             raise ValueError("invalid recorded chunking strategy")
         settings["chunking_strategy"] = strategy
     if args.observability is not None:

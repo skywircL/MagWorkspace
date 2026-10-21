@@ -56,24 +56,19 @@ type Service struct {
 // Credentials are intentionally excluded. Changing model content under a fixed
 // model tag requires a new model tag or pipeline revision before rebuilding.
 func Profile(model string, dimensions int, parserURL, embeddingURL, vectorURL string, avgLen float64) domain.IndexProfile {
-	profile, _ := ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, ChunkingStructure)
+	profile, _ := ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, ChunkingParentChild)
 	return profile
 }
 
-// ProfileWithChunking keeps the original profile hash for an explicit legacy
-// rollout. New chunk boundaries require a distinct immutable index namespace.
+// ProfileWithChunking freezes the parent/child boundaries and relational storage layout.
 func ProfileWithChunking(model string, dimensions int, parserURL, embeddingURL, vectorURL string, avgLen float64, strategy string) (domain.IndexProfile, error) {
 	if strategy == "" {
-		strategy = ChunkingStructure
+		strategy = ChunkingParentChild
 	}
-	pipeline := "mw-index-v3/minio-qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3/chunk-800-100"
-	switch strategy {
-	case ChunkingLegacy:
-	case ChunkingStructure:
-		pipeline = "mw-index-v4/minio-qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3/structure-v2-800-100/manifest-2"
-	default:
+	if strategy != ChunkingParentChild {
 		return domain.IndexProfile{}, &Failure{Code: "artifact_invalid"}
 	}
+	pipeline := "mw-index-v5/mysql-parent-child-4096-384-76/qdrant-1.16.2-native-bm25-rrf61/tika-3.3.3"
 	data, _ := json.Marshal([]any{pipeline, model, dimensions,
 		strings.TrimRight(parserURL, "/"), strings.TrimRight(embeddingURL, "/"), strings.TrimRight(vectorURL, "/"), bm25Options(avgLen)})
 	hash := sha256.Sum256(data)
@@ -310,14 +305,12 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 	}
 	s.progress(ctx, input.Job, "chunking", 0)
 	_, finishChunk := s.opts.Telemetry.Start(ctx, "index.chunk")
-	chunks, err := SplitWithStrategy(text, s.profile.ChunkingStrategy)
+	parents, children, err := SplitParentChild(text)
 	finishChunk(err)
 	if err != nil {
 		return err
 	}
-	s.opts.Telemetry.ObserveCount("index.chunk", "success", len(chunks))
-	texts := make([]string, 0, len(chunks))
-	searchChunks := make([]domain.IndexChunk, 0, len(chunks))
+	chunks := append(parents, children...)
 	for i := range chunks {
 		var id [16]byte
 		if _, err = rand.Read(id[:]); err != nil {
@@ -325,17 +318,22 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 		}
 		chunks[i].ID = hex.EncodeToString(id[:])
 		chunks[i].IndexID = input.Job.ID
+		chunks[i].Generation = input.Job.Generation
 		chunks[i].DocumentID = input.Job.DocumentID
 		chunks[i].VersionID = input.Job.VersionID
 		chunks[i].SourceSHA256 = input.Job.SourceSHA256
-		// Keep every canonical span for immutable references, but never send
-		// whitespace-only spans to embedding or search providers.
+	}
+	texts := make([]string, 0, len(children))
+	searchChunks := make([]domain.IndexChunk, 0, len(children))
+	for i := len(parents); i < len(chunks); i++ {
+		chunks[i].ParentID = chunks[chunks[i].ParentOrdinal].ID
 		if strings.TrimSpace(chunks[i].Content) != "" {
 			texts = append(texts, chunks[i].Content)
 			searchChunks = append(searchChunks, chunks[i])
 		}
 	}
-	s.progress(ctx, input.Job, "embedding", len(chunks))
+	s.opts.Telemetry.ObserveCount("index.chunk", "success", len(children))
+	s.progress(ctx, input.Job, "embedding", len(children))
 	embedCtx, finishEmbed := s.opts.Telemetry.Start(ctx, "index.embed")
 	vectors, err := s.embedder.Embed(embedCtx, texts)
 	finishEmbed(err)
@@ -343,35 +341,22 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 		return err
 	}
 	s.opts.Telemetry.ObserveCount("index.embed", "success", len(vectors))
-	s.progress(ctx, input.Job, "writing", len(chunks))
+	s.progress(ctx, input.Job, "writing", len(children))
 	writeCtx, finishWrite := s.opts.Telemetry.Start(ctx, "index.write")
-	key := artifactKey(input.Job.ProfileID, input.Job.Generation)
-	var artifact []byte
 	err = func() error {
 		if err := s.search.Ensure(writeCtx, s.profile.ID, s.profile.Dimensions); err != nil {
 			return err
 		}
-		if err := s.search.Upsert(writeCtx, s.profile.ID, input.Job.Generation, input.Job.WorkspaceID, searchChunks, vectors); err != nil {
-			return err
-		}
-		var err error
-		artifact, err = encodeManifest(input.Job, text, chunks, s.profile.ChunkingStrategy)
-		if err != nil {
-			return err
-		}
-		if err = s.objects.Put(writeCtx, key, artifact); err != nil {
-			return &Failure{Code: "artifact_unavailable"}
-		}
-		return nil
+		return s.search.Upsert(writeCtx, s.profile.ID, input.Job.Generation, input.Job.WorkspaceID, searchChunks, vectors)
 	}()
 	finishWrite(err)
 	if err != nil {
 		return err
 	}
 	s.opts.Telemetry.ObserveCount("index.write", "success", len(searchChunks))
-	s.progress(ctx, input.Job, "publishing", len(chunks))
+	s.progress(ctx, input.Job, "publishing", len(children))
 	publishCtx, finishPublish := s.opts.Telemetry.Start(ctx, "index.publish")
-	err = s.db.FinishDocumentIndex(publishCtx, input.Job, key, digestBytes(artifact), len(chunks))
+	err = s.db.FinishDocumentIndex(publishCtx, input.Job, chunks)
 	finishPublish(err)
 	if err != nil && !errors.Is(err, domain.ErrForbidden) && !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrInvalid) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		// This includes DB deadlock/lock-timeout, mapped to Conflict by store.
@@ -393,9 +378,6 @@ func (s *Service) CleanupOnce(ctx context.Context) error {
 	for _, item := range items {
 		cleanCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err = s.search.DeleteGeneration(cleanCtx, item.ProfileID, item.Generation)
-		if err == nil {
-			err = s.objects.Delete(cleanCtx, artifactKey(item.ProfileID, item.Generation))
-		}
 		if err == nil {
 			err = s.db.CompleteIndexCleanup(cleanCtx, item.ID)
 		}
@@ -505,30 +487,25 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 	if err != nil {
 		return nil, err
 	}
-	hits := []domain.SearchHit{}
 	published := make(map[string]domain.IndexJob)
-	headers := make(map[string]string)
-	hydrateCtx, finishHydrate := s.opts.Telemetry.Start(ctx, "retrieval.hydrate")
 	for _, ref := range refs {
-		chunks, err := s.loadManifest(hydrateCtx, ref.Job)
-		if err != nil {
-			finishHydrate(err)
-			return nil, err
-		}
 		published[ref.Job.ID] = ref.Job
-		if rerank {
-			for id, header := range contextHeaders(chunks) {
-				headers[id] = header
-			}
-		}
-		for _, chunk := range chunks {
-			c, ok := candidatesByID[chunk.ID]
-			if ok && c.IndexID == ref.Job.ID && c.Generation == ref.Job.Generation {
-				hits = append(hits, domain.SearchHit{Chunk: chunk, Title: ref.Title, Score: scores[chunk.ID]})
-			}
-		}
 	}
-	finishHydrate(nil)
+	hints := make([]domain.IndexCandidate, 0, len(candidatesByID))
+	for _, c := range candidatesByID {
+		c.Score = scores[c.ChunkID]
+		hints = append(hints, c)
+	}
+	hydrateCtx, finishHydrate := s.opts.Telemetry.Start(ctx, "retrieval.hydrate")
+	hits, err := s.db.ResolveIndexChunks(hydrateCtx, userID, workspaceID, s.profile.ID, hints, documentIDs)
+	finishHydrate(err)
+	if err != nil {
+		return nil, err
+	}
+	headers := make(map[string]string, len(hits))
+	for _, hit := range hits {
+		headers[hit.Chunk.ID] = hit.Chunk.ContextHeader
+	}
 	s.opts.Telemetry.ObserveCount("retrieval.hydrate", "success", len(hits))
 	// Recheck before sending trusted passages to the model, then again after
 	// the external call (including a successful empty result or model fallback).
@@ -547,9 +524,7 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 			return nil, err
 		}
 	}
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
+	hits = expandParentHits(hits, limit)
 	s.opts.Telemetry.ObserveCount("retrieval.filter", "success", len(hits))
 	return hits, nil
 }

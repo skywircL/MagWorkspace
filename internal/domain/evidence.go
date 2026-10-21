@@ -7,7 +7,7 @@ import (
 )
 
 // Evidence identifies a verified passage acquired by one private agent run.
-// Content is hydrated from the immutable object manifest, never stored in MySQL.
+// Content is hydrated from the immutable published MySQL chunk generation.
 type Evidence struct {
 	ID           string    `json:"evidence_id"`
 	RunID        string    `json:"run_id"`

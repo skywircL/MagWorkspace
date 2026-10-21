@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"time"
 
-	"magworkspace/internal/domain"
 	"magworkspace/internal/indexing"
 )
 
@@ -60,7 +59,11 @@ func (s *server) indexChunks(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	chunks, err := s.cfg.Indexing.Chunks(ctx, userID(r), r.PathValue("workspaceID"), r.PathValue("documentID"), r.PathValue("versionID"), r.PathValue("indexID"))
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "parent"
+	}
+	chunks, err := s.cfg.Indexing.ChunksByKind(ctx, userID(r), r.PathValue("workspaceID"), r.PathValue("documentID"), r.PathValue("versionID"), r.PathValue("indexID"), kind)
 	if err != nil {
 		indexFailure(w, err)
 		return
@@ -76,18 +79,12 @@ func (s *server) indexChunk(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	chunks, err := s.cfg.Indexing.Chunks(ctx, userID(r), r.PathValue("workspaceID"), r.PathValue("documentID"), r.PathValue("versionID"), r.PathValue("indexID"))
+	chunk, err := s.cfg.Indexing.Chunk(ctx, userID(r), r.PathValue("workspaceID"), r.PathValue("documentID"), r.PathValue("versionID"), r.PathValue("indexID"), r.PathValue("chunkID"))
 	if err != nil {
 		indexFailure(w, err)
 		return
 	}
-	for _, chunk := range chunks {
-		if chunk.ID == r.PathValue("chunkID") {
-			respond(w, 200, chunk)
-			return
-		}
-	}
-	fail(w, domain.ErrNotFound)
+	respond(w, 200, chunk)
 }
 
 func indexFailure(w http.ResponseWriter, err error) {

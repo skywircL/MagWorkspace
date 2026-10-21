@@ -198,7 +198,7 @@ func TestHTTPRetrievalRejectsUnknownMalformedAndCrossRunCitations(t *testing.T) 
 	}
 }
 
-func TestHTTPRetrievalCorruptedManifestPreventsAnswerPublication(t *testing.T) {
+func TestHTTPRetrievalCorruptedSQLChunkPreventsAnswerPublication(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "corruptcitation")
 	write := x.upload(t, owner, "住宿标准：每晚 500 元。")
@@ -209,18 +209,18 @@ func TestHTTPRetrievalCorruptedManifestPreventsAnswerPublication(t *testing.T) {
 		if err != nil {
 			return result, err
 		}
-		x.objects.mu.Lock()
-		for key := range x.objects.data {
-			if strings.HasPrefix(key, "indexes/") {
-				x.objects.data[key] = []byte("corrupted")
-			}
-		}
-		x.objects.mu.Unlock()
+		outboxSQL(t, x, `UPDATE chunks SET content=REPEAT('x',OCTET_LENGTH(content)) WHERE index_id IN (SELECT id FROM document_indexes WHERE document_id=?) AND kind='parent'`, write.Document.ID)
 		return result, nil
 	})
 	response := x.request(t, "POST", sessionPath(session)+"/messages", owner.Token, map[string]string{"content": "住宿标准"}, 502)
-	if response.Error.Code != "evidence_unavailable" {
+	// SQL integrity is checked while validating the citation, before the
+	// content hydration that previously reported an object-store failure.
+	if response.Error.Code != "invalid_citation" {
 		t.Fatalf("corrupt evidence was not rejected: %+v", response.Error)
+	}
+	messages, _, err := x.store.Messages(context.Background(), owner.User.ID, write.Document.WorkspaceID, session.ID, 50, 0)
+	if err != nil || len(messages) != 1 || messages[0].Role != "user" {
+		t.Fatal("corrupted SQL evidence produced a persisted assistant answer")
 	}
 }
 
@@ -331,7 +331,7 @@ func TestHTTPRetrievalUncitedDeletedSourceCannotCommit(t *testing.T) {
 	}
 }
 
-func TestHTTPRetrievalCitationBatchRechecksSourcesAfterAllObjectReads(t *testing.T) {
+func TestHTTPRetrievalCitationBatchRechecksSQLSourcesBeforeReturning(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "batchcitation")
 	a := x.upload(t, owner, "甲住宿标准，A secret。")
@@ -351,21 +351,14 @@ func TestHTTPRetrievalCitationBatchRechecksSourcesAfterAllObjectReads(t *testing
 		Citations []evidenceResponse `json:"citations"`
 	}](t, x.request(t, "GET", sessionPath(session)+"/runs/"+answer.Run.ID+"/citations", owner.Token, nil, 200))
 	first := before.Citations[0].Evidence
-	reads := 0
-	x.objects.readHook(func(ctx context.Context, key string) error {
-		if strings.HasPrefix(key, "indexes/") {
-			reads++
-			if reads == 2 {
-				return x.store.DeleteDocument(ctx, owner.User.ID, a.Document.WorkspaceID, first.DocumentID)
-			}
-		}
-		return nil
-	})
+	if err := x.store.DeleteDocument(context.Background(), owner.User.ID, a.Document.WorkspaceID, first.DocumentID); err != nil {
+		t.Fatal(err)
+	}
 	after := integrationData[struct {
 		Citations []evidenceResponse `json:"citations"`
 	}](t, x.request(t, "GET", sessionPath(session)+"/runs/"+answer.Run.ID+"/citations", owner.Token, nil, 200))
 	if len(after.Citations) != 1 || after.Citations[0].Evidence.DocumentID == first.DocumentID {
-		t.Fatal("batch exposed an earlier passage deleted during later object I/O")
+		t.Fatal("citation batch returned a deleted SQL source from an earlier read")
 	}
 }
 

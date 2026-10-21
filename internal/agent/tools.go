@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	maxToolRequestBytes  = 256 << 10
-	maxToolResponseBytes = 1 << 20
+	maxToolRequestBytes = 256 << 10
+	// 64 immutable 4096-rune parents, including worst-case JSON escaping and
+	// bounded metadata, fit in 2 MiB. Keep bridges/magent/retrieval.py aligned.
+	maxToolResponseBytes = 2 << 20
 	toolRequestTimeout   = 90 * time.Second
 )
 

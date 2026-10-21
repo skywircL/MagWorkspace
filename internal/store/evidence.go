@@ -2,12 +2,9 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"unicode/utf8"
 
 	"magworkspace/internal/domain"
 )
@@ -132,7 +129,7 @@ func runSourcesValidTx(ctx context.Context, tx *sql.Tx, workspaceID, runID strin
 	if invalid != 0 {
 		return false, nil
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_evidence e WHERE `+sources+` AND (e.workspace_id<>? OR NOT EXISTS (SELECT 1 FROM documents d JOIN document_versions v ON v.document_id=d.id AND v.id=e.version_id AND v.sha256=e.source_sha256 JOIN document_indexes i ON i.id=e.index_id AND i.document_id=d.id AND i.workspace_id=d.workspace_id AND i.version_id=v.id AND i.source_sha256=v.sha256 AND i.generation=e.generation AND i.status='ready' WHERE d.id=e.document_id AND d.workspace_id=e.workspace_id AND d.deleted_at IS NULL`+filter+`))`, args...).Scan(&invalid); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_evidence e WHERE `+sources+` AND (e.workspace_id<>? OR NOT EXISTS (SELECT 1 FROM documents d JOIN document_versions v ON v.document_id=d.id AND v.id=e.version_id AND v.sha256=e.source_sha256 JOIN document_indexes i ON i.id=e.index_id AND i.document_id=d.id AND i.workspace_id=d.workspace_id AND i.version_id=v.id AND i.source_sha256=v.sha256 AND i.generation=e.generation AND i.status='ready' JOIN chunks c ON c.index_id=i.id AND c.generation=i.generation AND c.id=e.chunk_id AND c.sha256=e.sha256 AND c.start_byte=e.start_byte AND c.end_byte=e.end_byte WHERE d.id=e.document_id AND d.workspace_id=e.workspace_id AND d.deleted_at IS NULL`+filter+`))`, args...).Scan(&invalid); err != nil {
 		return false, err
 	}
 	return invalid == 0, nil
@@ -266,20 +263,16 @@ func (s *Store) BindRunHistory(ctx context.Context, userID, workspaceID, session
 }
 
 func validEvidenceChunk(chunk domain.IndexChunk) bool {
-	if !validHexID(chunk.ID) || !validHexID(chunk.IndexID) || !validHexID(chunk.DocumentID) || !validHexID(chunk.VersionID) || !validArtifactSHA(chunk.SourceSHA256) || !validArtifactSHA(chunk.SHA256) || chunk.Ordinal < 0 || chunk.Ordinal >= domain.MaxIndexChunks || chunk.StartByte < 0 || chunk.EndByte <= chunk.StartByte || chunk.EndByte > domain.MaxExtractedBytes || chunk.EndByte-chunk.StartByte != len(chunk.Content) || !utf8.ValidString(chunk.Content) || utf8.RuneCountInString(chunk.Content) > domain.ChunkRunes {
-		return false
-	}
-	digest := sha256.Sum256([]byte(chunk.Content))
-	return hex.EncodeToString(digest[:]) == chunk.SHA256
+	return validStoredChunk(chunk)
 }
 
 func sameEvidenceChunk(e domain.Evidence, chunk domain.IndexChunk, generation string) bool {
 	return e.IndexID == chunk.IndexID && e.ChunkID == chunk.ID && e.DocumentID == chunk.DocumentID && e.VersionID == chunk.VersionID && e.Generation == generation && e.SourceSHA256 == chunk.SourceSHA256 && e.SHA256 == chunk.SHA256 && e.StartByte == chunk.StartByte && e.EndByte == chunk.EndByte
 }
 
-// RecordRunEvidence accepts only server-hydrated manifest passages. All mutable
-// authorization and source bindings are checked again at acquisition. Content
-// is deliberately absent from this table; callers hydrate the immutable object.
+// RecordRunEvidence binds only exact, published database chunks. Authorization,
+// generation and immutable content are checked again at acquisition. Evidence
+// stores a stable reference; chunk plaintext remains in the chunks table.
 func (s *Store) RecordRunEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit) ([]domain.Evidence, error) {
 	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, false)
 }
@@ -323,12 +316,29 @@ func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sess
 				return domain.ErrForbidden
 			}
 			var generation, title string
-			var chunkCount int
-			err = tx.QueryRowContext(ctx, `SELECT i.generation,d.title,i.chunk_count FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id JOIN document_versions v ON v.id=i.version_id AND v.document_id=i.document_id AND v.sha256=i.source_sha256 WHERE i.id=? AND i.workspace_id=? AND i.document_id=? AND i.version_id=? AND i.source_sha256=? AND i.status='ready' AND d.deleted_at IS NULL AND (d.current_version_id=i.version_id OR (? AND (EXISTS(SELECT 1 FROM run_document_sources ds WHERE ds.run_id=? AND ds.document_id=d.id AND ds.version_id=i.version_id AND ds.source_sha256=i.source_sha256 AND ds.index_id=i.id AND ds.generation=i.generation) OR EXISTS(SELECT 1 FROM run_evidence re WHERE re.run_id=? AND re.document_id=d.id AND re.version_id=i.version_id AND re.source_sha256=i.source_sha256 AND re.index_id=i.id AND re.generation=i.generation))))`, chunk.IndexID, workspaceID, chunk.DocumentID, chunk.VersionID, chunk.SourceSHA256, allowPinned, runID, runID).Scan(&generation, &title, &chunkCount)
+			var chunkCount, parentCount int
+			err = tx.QueryRowContext(ctx, `SELECT i.generation,d.title,i.chunk_count,i.parent_count FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id JOIN document_versions v ON v.id=i.version_id AND v.document_id=i.document_id AND v.sha256=i.source_sha256 WHERE i.id=? AND i.workspace_id=? AND i.document_id=? AND i.version_id=? AND i.source_sha256=? AND i.status='ready' AND d.deleted_at IS NULL AND (d.current_version_id=i.version_id OR (? AND (EXISTS(SELECT 1 FROM run_document_sources ds WHERE ds.run_id=? AND ds.document_id=d.id AND ds.version_id=i.version_id AND ds.source_sha256=i.source_sha256 AND ds.index_id=i.id AND ds.generation=i.generation) OR EXISTS(SELECT 1 FROM run_evidence re WHERE re.run_id=? AND re.document_id=d.id AND re.version_id=i.version_id AND re.source_sha256=i.source_sha256 AND re.index_id=i.id AND re.generation=i.generation))))`, chunk.IndexID, workspaceID, chunk.DocumentID, chunk.VersionID, chunk.SourceSHA256, allowPinned, runID, runID).Scan(&generation, &title, &chunkCount, &parentCount)
 			if err != nil {
 				return err
 			}
-			if !validHexID(generation) || chunk.Ordinal >= chunkCount {
+			if chunk.Kind == "parent" {
+				chunkCount = parentCount
+			}
+			if !validHexID(generation) || chunk.Generation != generation || chunk.Ordinal >= chunkCount {
+				return domain.ErrInvalid
+			}
+			// Source metadata and a plausible digest alone do not prove that a
+			// passage belongs to this publication. Compare against the row that
+			// was committed atomically with its ready generation.
+			var stored domain.IndexChunk
+			err = tx.QueryRowContext(ctx, `SELECT kind,parent_id,ordinal,start_byte,end_byte,content,sha256,context_header FROM chunks WHERE index_id=? AND generation=? AND id=?`, chunk.IndexID, generation, chunk.ID).Scan(&stored.Kind, &stored.ParentID, &stored.Ordinal, &stored.StartByte, &stored.EndByte, &stored.Content, &stored.SHA256, &stored.ContextHeader)
+			if errors.Is(err, sql.ErrNoRows) {
+				return domain.ErrInvalid
+			}
+			if err != nil {
+				return err
+			}
+			if stored.Kind != chunk.Kind || stored.ParentID != chunk.ParentID || stored.Ordinal != chunk.Ordinal || stored.StartByte != chunk.StartByte || stored.EndByte != chunk.EndByte || stored.Content != chunk.Content || stored.SHA256 != chunk.SHA256 || stored.ContextHeader != chunk.ContextHeader {
 				return domain.ErrInvalid
 			}
 			e, err := scanEvidence(tx.QueryRowContext(ctx, `SELECT `+evidenceColumns+` FROM run_evidence e WHERE e.run_id=? AND e.index_id=? AND e.chunk_id=?`, runID, chunk.IndexID, chunk.ID))
@@ -371,7 +381,7 @@ func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sess
 // still makes it inaccessible. Generation/source changes invalidate it.
 func evidenceSourceValidTx(ctx context.Context, tx *sql.Tx, e domain.Evidence) error {
 	var valid bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d JOIN document_versions v ON v.document_id=d.id AND v.id=? AND v.sha256=? JOIN document_indexes i ON i.id=? AND i.document_id=d.id AND i.workspace_id=d.workspace_id AND i.version_id=v.id AND i.source_sha256=v.sha256 AND i.generation=? AND i.status='ready' WHERE d.id=? AND d.workspace_id=? AND d.deleted_at IS NULL)`, e.VersionID, e.SourceSHA256, e.IndexID, e.Generation, e.DocumentID, e.WorkspaceID).Scan(&valid)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d JOIN document_versions v ON v.document_id=d.id AND v.id=? AND v.sha256=? JOIN document_indexes i ON i.id=? AND i.document_id=d.id AND i.workspace_id=d.workspace_id AND i.version_id=v.id AND i.source_sha256=v.sha256 AND i.generation=? AND i.status='ready' JOIN chunks c ON c.index_id=i.id AND c.generation=i.generation AND c.id=? AND c.sha256=? AND c.start_byte=? AND c.end_byte=? WHERE d.id=? AND d.workspace_id=? AND d.deleted_at IS NULL)`, e.VersionID, e.SourceSHA256, e.IndexID, e.Generation, e.ChunkID, e.SHA256, e.StartByte, e.EndByte, e.DocumentID, e.WorkspaceID).Scan(&valid)
 	if err != nil {
 		return err
 	}

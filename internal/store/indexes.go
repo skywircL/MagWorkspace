@@ -11,7 +11,7 @@ import (
 	"magworkspace/internal/domain"
 )
 
-const indexColumns = `i.id,i.workspace_id,i.document_id,i.version_id,i.profile_id,i.source_sha256,i.status,i.error_code,i.attempts,i.generation,i.created_by,i.created_at,i.updated_at,i.finished_at,i.artifact_key,i.artifact_sha256,i.chunk_count`
+const indexColumns = `i.id,i.workspace_id,i.document_id,i.version_id,i.profile_id,i.source_sha256,i.status,i.error_code,i.attempts,i.generation,i.created_by,i.created_at,i.updated_at,i.finished_at,i.chunk_count,i.parent_count`
 
 func validProfileID(id string) bool {
 	if len(id) != 32 && len(id) != 64 {
@@ -42,7 +42,7 @@ func validIndexProfile(profile domain.IndexProfile) bool {
 }
 
 func indexDest(job *domain.IndexJob) []any {
-	return []any{&job.ID, &job.WorkspaceID, &job.DocumentID, &job.VersionID, &job.ProfileID, &job.SourceSHA256, &job.Status, &job.ErrorCode, &job.Attempts, &job.Generation, &job.CreatedBy, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.ArtifactKey, &job.ArtifactSHA256, &job.ChunkCount}
+	return []any{&job.ID, &job.WorkspaceID, &job.DocumentID, &job.VersionID, &job.ProfileID, &job.SourceSHA256, &job.Status, &job.ErrorCode, &job.Attempts, &job.Generation, &job.CreatedBy, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.ChunkCount, &job.ParentCount}
 }
 
 func scanIndex(row rowScanner) (domain.IndexJob, error) {
@@ -74,7 +74,7 @@ func enqueueIndexTx(ctx context.Context, tx *sql.Tx, userID, workspaceID, docume
 		if err = queueIndexCleanupTx(ctx, tx, job.ProfileID, job.Generation); err != nil {
 			return job, false, err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE document_indexes SET status='queued',error_code='',generation='',lease_expires_at=NULL,artifact_key='',artifact_sha256='',chunk_count=0,created_by=?,finished_at=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=?`, userID, job.ID)
+		_, err = tx.ExecContext(ctx, `UPDATE document_indexes SET status='queued',error_code='',generation='',lease_expires_at=NULL,chunk_count=0,parent_count=0,created_by=?,finished_at=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=?`, userID, job.ID)
 	} else if errors.Is(err, domain.ErrNotFound) {
 		job.ID, err = newID()
 		if err == nil {
@@ -311,9 +311,12 @@ func validArtifactSHA(value string) bool {
 	return true
 }
 
-func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJob, artifactKey, artifactSHA256 string, chunkCount int) error {
-	if !validProfileID(expected.ProfileID) || !validHexID(expected.Generation) || artifactKey != "indexes/"+expected.ProfileID+"/"+expected.Generation+"/manifest.json" || !validArtifactSHA(artifactSHA256) || chunkCount <= 0 || chunkCount > domain.MaxIndexChunks {
-		return domain.ErrInvalid
+// FinishDocumentIndex publishes trusted chunk bodies and the ready state in one
+// transaction, after the worker has persisted and verified the search engine.
+func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJob, chunks []domain.IndexChunk) error {
+	parents, children, err := validateIndexChunks(expected, chunks)
+	if err != nil {
+		return err
 	}
 	return s.transaction(ctx, func(tx *sql.Tx) error {
 		job, deleted, active, err := lockIndex(ctx, tx, expected)
@@ -340,9 +343,21 @@ func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJo
 		if source != job.SourceSHA256 {
 			return domain.ErrConflict
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE document_indexes SET status='ready',artifact_key=?,artifact_sha256=?,chunk_count=?,lease_expires_at=NULL,error_code='',finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=?`, artifactKey, artifactSHA256, chunkCount, job.ID)
+		if err = insertIndexChunksTx(ctx, tx, chunks); err != nil {
+			return err
+		}
+		// Recheck the lease after the bounded inserts: expiry while persisting
+		// must roll back the chunk rows as well as publication.
+		result, err := tx.ExecContext(ctx, `UPDATE document_indexes SET status='ready',chunk_count=?,parent_count=?,lease_expires_at=NULL,error_code='',finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=? AND generation=? AND status='running' AND lease_expires_at>UTC_TIMESTAMP(6)`, children, parents, job.ID, job.Generation)
 		if err != nil {
 			return err
+		}
+		updated, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if updated != 1 {
+			return domain.ErrConflict
 		}
 		return deleteIndexDeliveryTx(ctx, tx, job.ID)
 	})
@@ -473,7 +488,7 @@ func (s *Store) ResolveIndexes(ctx context.Context, userID, workspaceID, profile
 }
 
 // nil means the authorized workspace; an explicit empty selection means none.
-// Apply the same boundary before external search and before manifest hydration.
+// Apply the same boundary before external search and before chunk hydration.
 func documentScopeFilter(selections [][]string) (string, []any, error) {
 	if len(selections) > 1 {
 		return "", nil, domain.ErrInvalid

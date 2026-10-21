@@ -16,6 +16,7 @@ import (
 	"magworkspace/internal/domain"
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
+	"magworkspace/internal/reranking"
 	"magworkspace/internal/store"
 )
 
@@ -339,7 +340,7 @@ func indexGate(ctx context.Context, entered chan<- struct{}, release <-chan stru
 	}
 }
 
-func TestHTTPIndexesPublishAfterSearchAndManifest(t *testing.T) {
+func TestHTTPIndexesPublishAfterSearchAndSQLChunks(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "index-publish")
 	text := strings.Repeat("知识库保存可信原文。", 100)
@@ -349,34 +350,20 @@ func TestHTTPIndexesPublishAfterSearchAndManifest(t *testing.T) {
 		t.Fatalf("upload was not atomically queued: %+v", queued)
 	}
 	upEntered, upRelease := make(chan struct{}, 1), make(chan struct{})
-	putEntered, putRelease := make(chan struct{}, 1), make(chan struct{})
-	var upOnce, putOnce sync.Once
+	var upOnce sync.Once
 	defer upOnce.Do(func() { close(upRelease) })
-	defer putOnce.Do(func() { close(putRelease) })
 	x.search.setUpsert(func(ctx context.Context) error { return indexGate(ctx, upEntered, upRelease) })
-	x.objects.putHook(func(ctx context.Context, key string) error {
-		if strings.HasPrefix(key, "indexes/") {
-			return indexGate(ctx, putEntered, putRelease)
-		}
-		return nil
-	})
 	done := indexStartWorker(x)
 	indexAwait(t, upEntered)
-	for _, stage := range []string{"search", "manifest"} {
-		job := x.job(t, owner, write)
-		if job.Status != "running" || job.ChunkCount != 0 {
-			t.Fatalf("published before %s complete: %+v", stage, job)
-		}
-		x.request(t, "GET", indexChunksPath(write, job), owner.Token, nil, 409)
-		if hits := x.find(t, owner.Token, write.Document.WorkspaceID, "hybrid").Hits; len(hits) != 0 {
-			t.Fatalf("unpublished generation searchable: %+v", hits)
-		}
-		if stage == "search" {
-			upOnce.Do(func() { close(upRelease) })
-			indexAwait(t, putEntered)
-		}
+	job := x.job(t, owner, write)
+	if job.Status != "running" || job.ChunkCount != 0 || job.ParentCount != 0 {
+		t.Fatal("published before external persistence", job)
 	}
-	putOnce.Do(func() { close(putRelease) })
+	x.request(t, "GET", indexChunksPath(write, job), owner.Token, nil, 409)
+	if hits := x.find(t, owner.Token, write.Document.WorkspaceID, "hybrid").Hits; len(hits) != 0 {
+		t.Fatal("unpublished generation searchable")
+	}
+	upOnce.Do(func() { close(upRelease) })
 	if err := indexWorkerResult(t, done); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +373,7 @@ func TestHTTPIndexesPublishAfterSearchAndManifest(t *testing.T) {
 	}
 	page := x.request(t, "GET", indexChunksPath(write, ready)+"?page=1&page_size=1", owner.Token, nil, 200)
 	chunks := integrationData[[]domain.IndexChunk](t, page)
-	if page.Total != ready.ChunkCount || len(chunks) != 1 || chunks[0].IndexID != ready.ID || chunks[0].VersionID != write.Version.ID || chunks[0].SourceSHA256 != write.Version.SHA256 {
+	if page.Total != ready.ParentCount || len(chunks) != 1 || chunks[0].IndexID != ready.ID || chunks[0].VersionID != write.Version.ID || chunks[0].SourceSHA256 != write.Version.SHA256 {
 		t.Fatalf("invalid manifest chunk: %+v", chunks)
 	}
 	chunk := integrationData[domain.IndexChunk](t, x.request(t, "GET", indexChunksPath(write, ready)+"/"+chunks[0].ID, owner.Token, nil, 200))
@@ -394,7 +381,7 @@ func TestHTTPIndexesPublishAfterSearchAndManifest(t *testing.T) {
 		t.Fatal("single chunk does not match immutable manifest")
 	}
 	result := x.find(t, owner.Token, write.Document.WorkspaceID, "hybrid")
-	if result.Mode != "hybrid" || result.ProfileID != x.profile.ID || len(result.Hits) != ready.ChunkCount {
+	if result.Mode != "hybrid" || result.ProfileID != x.profile.ID || len(result.Hits) != ready.ParentCount {
 		t.Fatalf("hybrid result=%+v", result)
 	}
 	for _, hit := range result.Hits {
@@ -431,7 +418,7 @@ func TestHTTPIndexesIgnoreWhitespaceOnlySearchChunks(t *testing.T) {
 			if job.Status != "ready" {
 				t.Fatalf("valid document did not become ready: %+v", job)
 			}
-			response := x.request(t, "GET", indexChunksPath(write, job), owner.Token, nil, 200)
+			response := x.request(t, "GET", indexChunksPath(write, job)+"?kind=child&page_size=100", owner.Token, nil, 200)
 			chunks := integrationData[[]domain.IndexChunk](t, response)
 			blank := 0
 			for _, chunk := range chunks {
@@ -455,7 +442,7 @@ func TestHTTPIndexesIgnoreWhitespaceOnlySearchChunks(t *testing.T) {
 				}
 			}
 			result := x.find(t, owner.Token, write.Document.WorkspaceID, "hybrid")
-			if len(result.Hits) != len(writes[0].chunks) {
+			if len(result.Hits) != job.ParentCount {
 				t.Fatal("nonempty document chunks were lost from search")
 			}
 			for _, hit := range result.Hits {
@@ -504,7 +491,7 @@ func TestHTTPIndexesViewerScopeAndCanonicalCandidates(t *testing.T) {
 		}, nil
 	})
 	got := x.find(t, viewer.Token, wid, "hybrid").Hits
-	if len(got) != 1 || got[0].Chunk.Content != "知识库当前版本权威正文" || got[0].Chunk.ID != local.ChunkID {
+	if len(got) != 1 || got[0].Chunk.Content != "知识库当前版本权威正文" || (len(got[0].MatchedChildIDs) != 1 || got[0].MatchedChildIDs[0] != local.ChunkID) {
 		t.Fatalf("untrusted hints escaped manifest scope: %+v", got)
 	}
 	x.search.setSearch(func(_ context.Context, _ indexTestQuery, _ []domain.IndexCandidate) ([]domain.IndexCandidate, error) {
@@ -527,7 +514,7 @@ func TestHTTPIndexesViewerScopeAndCanonicalCandidates(t *testing.T) {
 }
 
 func TestHTTPIndexesRevalidateAfterRemoteReads(t *testing.T) {
-	for _, boundary := range []string{"search", "manifest"} {
+	for _, boundary := range []string{"search", "rerank"} {
 		for _, change := range []string{"revoke", "new head", "delete"} {
 			t.Run(boundary+"/"+change, func(t *testing.T) {
 				x := newIndexFixture(t)
@@ -548,12 +535,12 @@ func TestHTTPIndexesRevalidateAfterRemoteReads(t *testing.T) {
 						return c, nil
 					})
 				} else {
-					x.objects.readHook(func(ctx context.Context, key string) error {
-						if strings.HasPrefix(key, "indexes/") {
-							return indexGate(ctx, entered, release)
+					attachIntegrationReranker(t, x, integrationReranker(func(ctx context.Context, _ string, passages []string) ([]reranking.Score, error) {
+						if err := indexGate(ctx, entered, release); err != nil {
+							return nil, err
 						}
-						return nil
-					})
+						return rerankScores(passages, .9), nil
+					}))
 				}
 				result := make(chan integrationResponse, 1)
 				go func() {
@@ -588,7 +575,7 @@ func TestHTTPIndexesRevalidateAfterRemoteReads(t *testing.T) {
 }
 
 func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
-	for _, stage := range []string{"search", "manifest"} {
+	for _, stage := range []string{"search", "publication"} {
 		t.Run(stage, func(t *testing.T) {
 			x := newIndexFixture(t)
 			owner := x.register(t, "index-retry")
@@ -596,12 +583,7 @@ func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
 			if stage == "search" {
 				x.search.setUpsert(func(context.Context) error { return &indexing.Failure{Code: "index_unavailable"} })
 			} else {
-				x.objects.putHook(func(_ context.Context, key string) error {
-					if strings.HasPrefix(key, "indexes/") {
-						return blob.ErrUnavailable
-					}
-					return nil
-				})
+				outboxSQL(t, x, `CREATE TRIGGER fail_chunk_publish BEFORE INSERT ON chunks FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='chunk write outage'`)
 			}
 			worked, err := x.service.ProcessOne(context.Background())
 			if !worked || err == nil {
@@ -609,8 +591,8 @@ func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
 			}
 			failed := x.job(t, owner, write)
 			wantCode := "index_unavailable"
-			if stage == "manifest" {
-				wantCode = "artifact_unavailable"
+			if stage == "publication" {
+				wantCode = "publication_unavailable"
 			}
 			if failed.Status != "failed" || failed.ErrorCode != wantCode || failed.Generation == "" {
 				t.Fatalf("wrong failed state: %+v", failed)
@@ -619,7 +601,9 @@ func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
 				t.Fatal("failed generation searchable")
 			}
 			x.search.setUpsert(nil)
-			x.objects.putHook(nil)
+			if stage == "publication" {
+				outboxSQL(t, x, "DROP TRIGGER fail_chunk_publish")
+			}
 			queued := integrationData[domain.IndexJob](t, x.request(t, "POST", indexJobPath(write), owner.Token, map[string]any{}, 202))
 			if queued.ID != failed.ID || queued.Status != "queued" {
 				t.Fatalf("retry changed job identity: %+v", queued)
@@ -656,7 +640,7 @@ func TestHTTPIndexesFailureRetryAndCleanup(t *testing.T) {
 	}
 }
 
-func TestHTTPIndexesFixedVersionChunksAndManifestIntegrity(t *testing.T) {
+func TestHTTPIndexesFixedVersionChunksAndSQLIntegrity(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "index-history")
 	write := x.upload(t, owner, "知识库不可变历史内容")
@@ -677,24 +661,15 @@ func TestHTTPIndexesFixedVersionChunksAndManifestIntegrity(t *testing.T) {
 	if got := x.find(t, owner.Token, write.Document.WorkspaceID, "hybrid").Hits; len(got) != 1 || got[0].Chunk.VersionID != second.Version.ID {
 		t.Fatalf("search included historical head: %+v", got)
 	}
-	key := "indexes/" + x.profile.ID + "/" + current.Generation + "/manifest.json"
-	x.objects.mu.Lock()
-	original := append([]byte(nil), x.objects.data[key]...)
-	x.objects.data[key] = []byte(`{"text":"forged external content"}`)
-	x.objects.mu.Unlock()
-	for _, path := range []string{indexChunksPath(second, current), indexChunksPath(second, current) + "/" + strings.Repeat("e", 32)} {
-		response := x.request(t, "GET", path, owner.Token, nil, 503)
-		if response.Error.Code != "artifact_integrity_failed" {
-			t.Fatalf("tampered manifest error=%s", response.Error.Code)
-		}
+	// MinIO outage cannot break published SQL chunk reads.
+	x.objects.readHook(func(context.Context, string) error { return blob.ErrUnavailable })
+	x.request(t, "GET", indexChunksPath(second, current), owner.Token, nil, 200)
+	if got := x.find(t, owner.Token, write.Document.WorkspaceID, "lexical").Hits; len(got) != 1 {
+		t.Fatal("SQL read depends on MinIO")
 	}
-	response := x.request(t, "POST", workspacePath(write.Document.WorkspaceID)+"/search", owner.Token, map[string]any{"query": "知识库", "mode": "lexical"}, 503)
-	if response.Error.Code != "artifact_integrity_failed" {
-		t.Fatalf("tampered search manifest error=%s", response.Error.Code)
-	}
-	x.objects.mu.Lock()
-	x.objects.data[key] = original
-	x.objects.mu.Unlock()
+	outboxSQL(t, x, "UPDATE chunks SET content=REPEAT('x',OCTET_LENGTH(content)) WHERE index_id=? AND kind='parent'", current.ID)
+	x.request(t, "GET", indexChunksPath(second, current), owner.Token, nil, 409)
+	x.request(t, "POST", workspacePath(write.Document.WorkspaceID)+"/search", owner.Token, map[string]any{"query": "知识库", "mode": "lexical"}, 409)
 	x.request(t, "DELETE", documentPath(write.Document), owner.Token, nil, 204)
 	x.request(t, "GET", indexChunksPath(write, first), owner.Token, nil, 404)
 	if got := x.find(t, owner.Token, write.Document.WorkspaceID, "lexical").Hits; len(got) != 0 {
@@ -712,12 +687,7 @@ func TestHTTPIndexesWriterRevokedBeforePublication(t *testing.T) {
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	var once sync.Once
 	defer once.Do(func() { close(release) })
-	x.objects.putHook(func(ctx context.Context, key string) error {
-		if strings.HasPrefix(key, "indexes/") {
-			return indexGate(ctx, entered, release)
-		}
-		return nil
-	})
+	x.search.setUpsert(func(ctx context.Context) error { return indexGate(ctx, entered, release) })
 	done := indexStartWorker(x)
 	indexAwait(t, entered)
 	x.request(t, "DELETE", workspacePath(wid)+"/members/"+writer.User.ID, owner.Token, nil, 204)

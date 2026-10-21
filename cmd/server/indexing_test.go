@@ -7,9 +7,9 @@ import (
 
 func TestConfigureChunkingStrategy(t *testing.T) {
 	t.Setenv("DOCUMENT_INDEXING_ENABLED", "true")
-	t.Setenv("CHUNKING_STRATEGY", "structure_v2")
+	t.Setenv("CHUNKING_STRATEGY", "parent_child_v1")
 	current, err := configureIndexing()
-	if err != nil || current.profile.ChunkingStrategy != indexing.ChunkingStructure {
+	if err != nil || current.profile.ChunkingStrategy != indexing.ChunkingParentChild {
 		t.Fatal("structure strategy missing", err)
 	}
 	t.Setenv("CHUNKING_STRATEGY", "legacy_v1")
@@ -72,7 +72,7 @@ func TestConfigureEmbeddingTimeoutBoundsAndStableProfile(t *testing.T) {
 
 func TestConfigureIndexRetryBudget(t *testing.T) {
 	t.Setenv("DOCUMENT_INDEXING_ENABLED", "true")
-	t.Setenv("CHUNKING_STRATEGY", "structure_v2")
+	t.Setenv("CHUNKING_STRATEGY", "parent_child_v1")
 	for _, value := range []string{"0", "3", "10"} {
 		t.Setenv("INDEX_MAX_RETRIES", value)
 		if _, err := configureIndexing(); err != nil {

@@ -418,10 +418,10 @@ class RerankStackOrchestrationTests(unittest.TestCase):
             self.invoke("up")
         settings = json.loads((self.runtime / "settings.json").read_text())
         self.assertFalse(settings["rerank"])
-        self.assertEqual(settings["chunking_strategy"], "structure_v2")
+        self.assertEqual(settings["chunking_strategy"], "parent_child_v1")
         override = (self.runtime / "override.yaml").read_text()
         self.assertIn("RERANK_ENABLED: 'false'", override)
-        self.assertIn("CHUNKING_STRATEGY: 'structure_v2'", override)
+        self.assertIn("CHUNKING_STRATEGY: 'parent_child_v1'", override)
         self.assertFalse(any("up" in command and command[-1] == "reranker" for command in self.commands()))
         self.assertNotIn("RERANK_API_KEY", settings["rerank_configuration"])
         private = dict(line.split("=", 1) for line in (self.runtime / "stack.env").read_text().splitlines())
@@ -462,7 +462,7 @@ class RerankStackOrchestrationTests(unittest.TestCase):
         state = self.runtime / "scifact-state.json"
         frozen = json.dumps(complete_state())
         state.write_text(frozen)
-        for arguments in [("up",), ("up", "--chunking-strategy", "structure_v2"),
+        for arguments in [("up",), ("up", "--chunking-strategy", "parent_child_v1"),
                           ("up", "--chunking-strategy", "legacy_v1")]:
             with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
                 self.invoke(*arguments)
@@ -471,7 +471,7 @@ class RerankStackOrchestrationTests(unittest.TestCase):
         (self.runtime / "settings.json").write_text(json.dumps({"observability": False,
             "execution": "qdrant_native", "chunking_strategy": "legacy_v1"}))
         with patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
-            self.invoke("up", "--chunking-strategy", "structure_v2")
+            self.invoke("up", "--chunking-strategy", "parent_child_v1")
         self.execute.assert_not_called()
         self.assertEqual(state.read_text(), frozen)
 
@@ -500,7 +500,7 @@ class RerankerEnvironmentTests(unittest.TestCase):
         self.config = dict(self.stack.RERANK_DEFAULTS)
         self.key = "private-synthetic-key-" + "a" * 32
         (self.runtime / "settings.json").write_text(json.dumps({
-            "rerank": True, "chunking_strategy": "structure_v2", "rerank_configuration": self.config}))
+            "rerank": True, "chunking_strategy": "parent_child_v1", "rerank_configuration": self.config}))
         (self.runtime / "stack.env").write_text("RERANK_API_KEY=" + self.key + "\n" +
                                                "".join(key + "=" + value + "\n" for key, value in self.config.items()))
         (self.runtime / "endpoints.json").write_text(json.dumps({"reranker:8091": "http://127.0.0.1:18091"}))
@@ -540,10 +540,10 @@ class RerankerEnvironmentTests(unittest.TestCase):
             opener.assert_not_called()
 
     def test_baseline_does_not_contact_model(self):
-        (self.runtime / "settings.json").write_text(json.dumps({"rerank": False, "chunking_strategy": "structure_v2"}))
+        (self.runtime / "settings.json").write_text(json.dumps({"rerank": False, "chunking_strategy": "parent_child_v1"}))
         with patch.object(self.module, "RUNTIME", self.runtime), \
                 patch.object(self.module.urllib.request, "build_opener") as opener:
-            self.assertEqual(self.module.reranker_environment(False), {"enabled": False, "chunking_strategy": "structure_v2"})
+            self.assertEqual(self.module.reranker_environment(False), {"enabled": False, "chunking_strategy": "parent_child_v1"})
             opener.assert_not_called()
 
     def test_scifact_forwards_explicit_mode_and_optional_chunking(self):
@@ -551,10 +551,10 @@ class RerankerEnvironmentTests(unittest.TestCase):
         baseline = self.module.stack_arguments(args)
         self.assertIn("--no-rerank", baseline)
         self.assertNotIn("--chunking-strategy", baseline)
-        args.rerank, args.chunking_strategy = True, "structure_v2"
+        args.rerank, args.chunking_strategy = True, "parent_child_v1"
         enabled = self.module.stack_arguments(args)
         self.assertIn("--rerank", enabled)
-        self.assertEqual(enabled[-2:], ["--chunking-strategy", "structure_v2"])
+        self.assertEqual(enabled[-2:], ["--chunking-strategy", "parent_child_v1"])
 
     def test_full_orchestrator_forwards_both_rebuilds_without_starting_real_work(self):
         root = self.runtime / "project"
@@ -566,7 +566,7 @@ class RerankerEnvironmentTests(unittest.TestCase):
         for enabled in (False, True):
             with self.subTest(rerank=enabled):
                 output = root / ("enabled" if enabled else "baseline")
-                argv = ["run-scifact.py", "--output", str(output), "--chunking-strategy", "structure_v2"]
+                argv = ["run-scifact.py", "--output", str(output), "--chunking-strategy", "parent_child_v1"]
                 if enabled:
                     argv.append("--rerank")
                 with patch.object(self.module, "ROOT", root), patch.object(self.module, "RUNTIME", self.runtime), \
@@ -583,7 +583,7 @@ class RerankerEnvironmentTests(unittest.TestCase):
                 self.assertEqual(len(startups), 2)
                 for startup in startups:
                     self.assertIn("--rerank" if enabled else "--no-rerank", startup)
-                    self.assertEqual(startup[-2:], ("--chunking-strategy", "structure_v2"))
+                    self.assertEqual(startup[-2:], ("--chunking-strategy", "parent_child_v1"))
                 evaluation = next(item.args for item in run.call_args_list if item.args[:4] == ("-u", "-m", "scripts.retrieval_eval", "run"))
                 self.assertEqual(evaluation[-2:], ("--request-timeout", "125"))
                 self.assertEqual(model.call_args_list, [call(enabled), call(enabled)])

@@ -81,21 +81,30 @@ try:
     job = ready(version)
     check(request("GET", version + "/content") == source, "original bytes changed")
     chunks = request("GET", version + "/indexes/" + job["id"] + "/chunks?page_size=100")
-    check(len(chunks) == job["chunk_count"] and chunks[0]["start_byte"] == 0 and
+    check(len(chunks) == job["parent_count"] and chunks[0]["start_byte"] == 0 and
           chunks[-1]["end_byte"] == len(source), "canonical chunk coverage endpoints changed")
     for i, item in enumerate(chunks):
         check(source[item["start_byte"]:item["end_byte"]] == item["content"].encode() and
-              len(item["content"]) <= 800, "chunk is not a bounded exact source slice")
+              len(item["content"]) <= 4096 and item["kind"] == "parent", "chunk is not a bounded exact source slice")
         if i:
-            check(chunks[i-1]["start_byte"] < item["start_byte"] <= chunks[i-1]["end_byte"] < item["end_byte"],
+            check(chunks[i-1]["end_byte"] == item["start_byte"] < item["end_byte"],
                   "chunk coverage has a gap or fails to advance")
     check(any(table in item["content"] for item in chunks), "fitting Markdown table was fragmented")
     check(any(code in item["content"] for item in chunks), "fitting fenced code was fragmented")
-    print("PASS: structure_v2 exact byte coverage, bounded chunks, intact Markdown table/code; chunks=" + str(len(chunks)), flush=True)
+    children = request("GET", version + "/indexes/" + job["id"] + "/chunks?kind=child&page_size=100")
+    check(len(children) == job["chunk_count"], "child count mismatch")
+    parents = {item["id"]: item for item in chunks}
+    for child in children:
+        parent = parents[child["parent_id"]]
+        check(child["kind"] == "child" and len(child["content"]) <= 384 and
+              parent["start_byte"] <= child["start_byte"] < child["end_byte"] <= parent["end_byte"] and
+              source[child["start_byte"]:child["end_byte"]] == child["content"].encode(), "invalid child containment")
+    print("PASS: parent_child_v1 exact bytes, bounded parent/child tree, intact Markdown; parents=" + str(len(chunks)) + " children=" + str(len(children)), flush=True)
     chunk = None
     for mode in ("lexical", "vector", "hybrid"):
         result = request("POST", workspace + "/search", {"query": "知识库", "mode": mode, "limit": 5})
         check(result["hits"], mode + " returned no hit")
+        check(len({h["chunk"]["id"] for h in result["hits"]}) == len(result["hits"]) and all(h["chunk"]["kind"] == "parent" and h["matched_child_ids"] for h in result["hits"]), "search did not merge parents")
         check(all(hit["chunk"]["content"].strip() for hit in result["hits"]), mode + " returned a whitespace-only hit")
         chunk = result["hits"][0]["chunk"]
         check(chunk["version_id"] == first["version"]["id"], mode + " returned wrong version")

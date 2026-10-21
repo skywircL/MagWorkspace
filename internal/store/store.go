@@ -22,7 +22,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql"}
+var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql"}
 
 type Store struct {
 	pool           *sql.DB
@@ -109,6 +109,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("unsupported database schema version %d", version)
 	}
 	for next := version + 1; next <= len(migrationFiles); next++ {
+		if next == 15 {
+			// Retired manifests cannot become trusted database chunks. Refuse
+			// non-empty old indexes before any destructive DDL. A fully
+			// applied v15 with only a lost marker remains safely resumable.
+			var count, legacyColumns, readySchema int
+			if err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM document_indexes`).Scan(&count); err != nil {
+				return err
+			}
+			if count > 0 {
+				if err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='document_indexes' AND column_name IN ('artifact_key','artifact_sha256')`).Scan(&legacyColumns); err != nil {
+					return err
+				}
+				if err = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='document_indexes' AND constraint_name='document_indexes_chunks'`).Scan(&readySchema); err != nil {
+					return err
+				}
+				if legacyColumns > 0 || readySchema != 1 {
+					return fmt.Errorf("clear retired indexes before parent_child migration")
+				}
+			}
+		}
 		content, err := migrations.ReadFile(migrationFiles[next-1])
 		if err != nil {
 			return err

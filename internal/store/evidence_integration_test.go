@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -24,21 +25,62 @@ type evidenceFixture struct {
 
 func newEvidenceFixture(t *testing.T) evidenceFixture {
 	t.Helper()
+	return newEvidenceFixtureWithPassages(t, []string{"住宿费用每晚最高报销 500 元。"})
+}
+
+func evidenceTestChunks(job domain.IndexJob, passages []string) []domain.IndexChunk {
+	chunks := make([]domain.IndexChunk, 0, 2*len(passages))
+	offset, childOrdinal := 0, 0
+	for ordinal, content := range passages {
+		pair := testIndexChunks(job, content)
+		parent := pair[0]
+		parent.Ordinal, parent.StartByte, parent.EndByte = ordinal, offset, offset+len(content)
+		chunks = append(chunks, parent)
+		runes := []rune(content)
+		childStart := offset
+		for start := 0; start < len(runes); start += domain.ChunkRunes {
+			child := pair[1]
+			child.Content = string(runes[start:min(start+domain.ChunkRunes, len(runes))])
+			child.StartByte, child.EndByte = childStart, childStart+len(child.Content)
+			child.Ordinal, child.ParentOrdinal = childOrdinal, ordinal
+			identity := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/child/%d", job.ID, job.Generation, childOrdinal)))
+			child.ID = hex.EncodeToString(identity[:])[:32]
+			digest := sha256.Sum256([]byte(child.Content))
+			child.SHA256 = hex.EncodeToString(digest[:])
+			chunks = append(chunks, child)
+			childStart = child.EndByte
+			childOrdinal++
+		}
+		offset = parent.EndByte
+	}
+	return chunks
+}
+
+func newEvidenceFixtureWithPassages(t *testing.T, passages []string) evidenceFixture {
+	t.Helper()
 	ctx := context.Background()
 	s, _ := testStore(t)
 	u, w := testUser(t, s, "evidence")
-	content := "住宿费用每晚最高报销 500 元。"
+	content := strings.Join(passages, "")
 	write, err := s.CreateDocument(ctx, u.ID, w.ID, "Travel policy", "travel.txt", []byte(content))
 	must(t, err)
-	job := publishTestIndex(t, s, u.ID, w.ID, write, testIndexProfile())
+	profile := testIndexProfile()
+	_, _, err = s.EnqueueDocumentIndex(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, profile)
+	must(t, err)
+	input, err := s.ClaimIndexJob(ctx, profile.ID, time.Minute)
+	must(t, err)
+	if input == nil {
+		t.Fatal("evidence index was not admitted")
+	}
+	chunks := evidenceTestChunks(input.Job, passages)
+	must(t, s.FinishDocumentIndex(ctx, input.Job, chunks))
+	job, err := s.DocumentIndex(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, profile.ID)
+	must(t, err)
 	session, err := s.CreateSession(ctx, u.ID, w.ID, "Evidence chat")
 	must(t, err)
 	run, _, _, err := s.BeginRun(ctx, u.ID, w.ID, session.ID, "住宿上限？", time.Minute)
 	must(t, err)
-	chunkID, err := newID()
-	must(t, err)
-	digest := sha256.Sum256([]byte(content))
-	hit := domain.SearchHit{Title: "untrusted search title", Chunk: domain.IndexChunk{ID: chunkID, IndexID: job.ID, DocumentID: write.Document.ID, VersionID: write.Version.ID, SourceSHA256: write.Version.SHA256, Content: content, SHA256: hex.EncodeToString(digest[:]), StartByte: 0, EndByte: len(content)}}
+	hit := domain.SearchHit{Title: "untrusted search title", Chunk: chunks[0]}
 	return evidenceFixture{s, u, w, session, run, write, job, hit}
 }
 
@@ -82,7 +124,7 @@ func TestMySQLEvidenceStableMetadataAndConcurrentDeduplication(t *testing.T) {
 	}
 	must(t, f.s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='run_evidence' AND column_name='content'`).Scan(&count))
 	if count != 0 {
-		t.Fatal("evidence plaintext must remain in immutable object storage")
+		t.Fatal("evidence should reference chunks without duplicating their plaintext")
 	}
 	loaded, err := f.s.RunEvidence(ctx, f.u.ID, f.w.ID, f.session.ID, f.run.ID, first[0].ID)
 	must(t, err)
@@ -95,12 +137,22 @@ func TestMySQLEvidenceAcquisitionValidatesMetadataAndCurrentSource(t *testing.T)
 	f := newEvidenceFixture(t)
 	ctx := context.Background()
 	for name, change := range map[string]func(*domain.SearchHit){
-		"chunk id":    func(h *domain.SearchHit) { h.Chunk.ID = "invalid" },
-		"digest":      func(h *domain.SearchHit) { h.Chunk.SHA256 = strings.Repeat("a", 64) },
-		"offset":      func(h *domain.SearchHit) { h.Chunk.EndByte++ },
-		"negative":    func(h *domain.SearchHit) { h.Chunk.StartByte = -1 },
-		"ordinal":     func(h *domain.SearchHit) { h.Chunk.Ordinal = 1 },
-		"source hash": func(h *domain.SearchHit) { h.Chunk.SourceSHA256 = "bad" },
+		"chunk id":      func(h *domain.SearchHit) { h.Chunk.ID = "invalid" },
+		"digest":        func(h *domain.SearchHit) { h.Chunk.SHA256 = strings.Repeat("a", 64) },
+		"offset":        func(h *domain.SearchHit) { h.Chunk.EndByte++ },
+		"negative":      func(h *domain.SearchHit) { h.Chunk.StartByte = -1 },
+		"ordinal":       func(h *domain.SearchHit) { h.Chunk.Ordinal = 1 },
+		"source hash":   func(h *domain.SearchHit) { h.Chunk.SourceSHA256 = "bad" },
+		"unknown chunk": func(h *domain.SearchHit) { h.Chunk.ID = strings.Repeat("e", 32) },
+		"generation":    func(h *domain.SearchHit) { h.Chunk.Generation = strings.Repeat("d", 32) },
+		"kind":          func(h *domain.SearchHit) { h.Chunk.Kind = "unknown" },
+		"parent":        func(h *domain.SearchHit) { h.Chunk.ParentID = strings.Repeat("e", 32) },
+		"header":        func(h *domain.SearchHit) { h.Chunk.ContextHeader = "forged section" },
+		"plausible forged body": func(h *domain.SearchHit) {
+			h.Chunk.Content = strings.Repeat("x", len(h.Chunk.Content))
+			digest := sha256.Sum256([]byte(h.Chunk.Content))
+			h.Chunk.SHA256 = hex.EncodeToString(digest[:])
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			hit := f.hit
@@ -131,6 +183,34 @@ func TestMySQLEvidenceAcquisitionValidatesMetadataAndCurrentSource(t *testing.T)
 	if len(cited) != 1 || !cited[0].Cited {
 		t.Fatalf("historical citation not committed: %+v", cited)
 	}
+}
+
+func TestMySQLEvidenceParentContextAndChildUseDistinctImmutableIdentities(t *testing.T) {
+	content := strings.Repeat("此处保留背景和上下文。", 120) + "末尾命中的住宿上限是500元。"
+	f := newEvidenceFixtureWithPassages(t, []string{content})
+	ctx := context.Background()
+	chunks := evidenceTestChunks(f.job, []string{content})
+	parent, child := chunks[0], chunks[len(chunks)-1]
+	if len([]rune(parent.Content)) <= domain.ChunkRunes || child.ParentID != parent.ID {
+		t.Fatal("fixture did not create a large parent and a tail child")
+	}
+	items := f.record(t, domain.SearchHit{Chunk: parent}, domain.SearchHit{Chunk: child})
+	if len(items) != 2 || items[0].ChunkID == items[1].ChunkID || items[0].SHA256 == items[1].SHA256 || items[0].StartByte == items[1].StartByte {
+		t.Fatalf("parent and child lost their distinct provenance: %+v", items)
+	}
+	for i, chunk := range []domain.IndexChunk{parent, child} {
+		stored, err := f.s.RunEvidence(ctx, f.u.ID, f.w.ID, f.session.ID, f.run.ID, items[i].ID)
+		must(t, err)
+		if !sameEvidenceChunk(stored, chunk, f.job.Generation) {
+			t.Fatal("evidence changed immutable parent/child source identity")
+		}
+	}
+	forged := child
+	forged.Content, forged.SHA256 = parent.Content, parent.SHA256
+	forged.StartByte, forged.EndByte = parent.StartByte, parent.EndByte
+	forged.Kind, forged.ParentID = "parent", ""
+	_, err := f.s.RecordRunEvidence(ctx, f.u.ID, f.w.ID, f.session.ID, f.run.ID, []domain.SearchHit{{Chunk: forged}})
+	wantError(t, err, domain.ErrInvalid)
 }
 
 func TestMySQLEvidenceFinalizationRejectsForeignUnknownAndMalformedCitations(t *testing.T) {
@@ -293,26 +373,23 @@ func TestMySQLEvidenceExpiredFinishDoesNotCommitCitations(t *testing.T) {
 }
 
 func TestMySQLEvidenceCapacityAndGenerationBinding(t *testing.T) {
-	f := newEvidenceFixture(t)
+	passages := make([]string, maxRunEvidence+1)
+	for i := range passages {
+		passages[i] = fmt.Sprintf("独立条款 %d：住宿费用每晚最高报销 500 元。\n", i)
+	}
+	f := newEvidenceFixtureWithPassages(t, passages)
 	ctx := context.Background()
-	_, err := f.s.pool.ExecContext(ctx, `UPDATE document_indexes SET chunk_count=65 WHERE id=?`, f.job.ID)
-	must(t, err)
-	hits := make([]domain.SearchHit, 64)
+	chunks := evidenceTestChunks(f.job, passages)
+	hits := make([]domain.SearchHit, maxRunEvidence)
 	for i := range hits {
-		hits[i] = f.hit
-		hits[i].Chunk.ID, err = newID()
-		must(t, err)
-		hits[i].Chunk.Ordinal = i
+		hits[i] = domain.SearchHit{Chunk: chunks[2*i], Title: f.hit.Title}
 	}
 	first := f.record(t, hits...)
-	if len(first) != 64 {
-		t.Fatalf("expected 64 acquired passages, got %d", len(first))
+	if len(first) != maxRunEvidence {
+		t.Fatalf("expected %d acquired passages, got %d", maxRunEvidence, len(first))
 	}
-	last := f.hit
-	last.Chunk.ID, err = newID()
-	must(t, err)
-	last.Chunk.Ordinal = 64
-	_, err = f.s.RecordRunEvidence(ctx, f.u.ID, f.w.ID, f.session.ID, f.run.ID, []domain.SearchHit{last})
+	last := domain.SearchHit{Chunk: chunks[2*maxRunEvidence], Title: f.hit.Title}
+	_, err := f.s.RecordRunEvidence(ctx, f.u.ID, f.w.ID, f.session.ID, f.run.ID, []domain.SearchHit{last})
 	wantError(t, err, domain.ErrInvalid)
 	if got := f.record(t, hits[0]); len(got) != 1 || got[0].ID != first[0].ID {
 		t.Fatal("capacity limit prevented idempotent reacquisition")

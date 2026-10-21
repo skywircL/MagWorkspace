@@ -24,12 +24,13 @@ type readDocumentToolInput struct {
 
 type readDocumentToolResult struct {
 	store.ToolDocument
-	ContentStatus string            `json:"content_status"`
-	Evidence      []domain.Evidence `json:"evidence"`
-	Offset        int               `json:"offset"`
-	HasMore       bool              `json:"has_more"`
-	NextOffset    *int              `json:"next_offset,omitempty"`
-	Query         string            `json:"query,omitempty"`
+	ContentStatus string                       `json:"content_status"`
+	Evidence      []domain.Evidence            `json:"evidence"`
+	Offset        int                          `json:"offset"`
+	HasMore       bool                         `json:"has_more"`
+	NextOffset    *int                         `json:"next_offset,omitempty"`
+	Query         string                       `json:"query,omitempty"`
+	EvidenceFocus map[string]*domain.ChunkSpan `json:"evidence_focus,omitempty"`
 }
 
 func toolLimit(value *int, defaultValue, maximum int) (int, error) {
@@ -103,7 +104,19 @@ func (s *server) knowledgeTool(ctx context.Context, uid, wid, sid, rid, name str
 		if err = attachKnowledgeContent(evidence, hits); err != nil {
 			return nil, err
 		}
-		return map[string]any{"evidence": evidence}, nil
+		focusByChunk := make(map[string]*domain.ChunkSpan, len(hits))
+		for _, hit := range hits {
+			if hit.Focus != nil {
+				focusByChunk[hit.Chunk.ID] = hit.Focus
+			}
+		}
+		focusByEvidence := make(map[string]*domain.ChunkSpan, len(evidence))
+		for _, item := range evidence {
+			if focus := focusByChunk[item.ChunkID]; focus != nil {
+				focusByEvidence[item.ID] = focus
+			}
+		}
+		return map[string]any{"evidence": evidence, "evidence_focus": focusByEvidence}, nil
 	case "read_document":
 		var fields map[string]json.RawMessage
 		if json.Unmarshal(raw, &fields) != nil {
@@ -208,8 +221,25 @@ func (s *server) readDocumentTool(ctx context.Context, uid, wid, sid, rid, profi
 	if err = attachKnowledgeContent(out.Evidence, hits); err != nil {
 		return out, err
 	}
+	if in.Query != "" {
+		out.EvidenceFocus = make(map[string]*domain.ChunkSpan)
+		terms := strings.Fields(strings.ToLower(in.Query))
+		if len(terms) > 0 {
+			for _, item := range out.Evidence {
+				lower := strings.ToLower(item.Content)
+				if offset := strings.Index(lower, terms[0]); offset >= 0 {
+					// Lowercasing can change UTF-8 byte width; translate through rune
+					// positions so the focus always describes the original bytes.
+					start := utf8.RuneCountInString(lower[:offset])
+					end := start + utf8.RuneCountInString(terms[0])
+					runes := []rune(item.Content)
+					out.EvidenceFocus[item.ID] = &domain.ChunkSpan{StartByte: item.StartByte + len(string(runes[:start])), EndByte: item.StartByte + len(string(runes[:end]))}
+				}
+			}
+		}
+	}
 	// RecordRunDocumentEvidence rechecks live authorization and source metadata
-	// after MinIO I/O, including an empty search/page. Metadata is re-read too.
+	// after SQL chunk reads, including an empty search/page. Metadata is re-read too.
 	final, err := s.db.RunToolDocument(ctx, uid, wid, sid, rid, in.DocumentID, out.Version.ID, out.Index.ID, profileID)
 	if err != nil {
 		return out, err

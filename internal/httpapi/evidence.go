@@ -236,25 +236,20 @@ func (s *server) hydrateEvidence(ctx context.Context, uid, wid, sid, rid, eid st
 	if s.cfg.Indexing == nil {
 		return domain.Evidence{}, agent.ErrUnavailable
 	}
-	chunks, err := s.cfg.Indexing.Chunks(ctx, uid, wid, e.DocumentID, e.VersionID, e.IndexID)
+	chunk, err := s.cfg.Indexing.Chunk(ctx, uid, wid, e.DocumentID, e.VersionID, e.IndexID, e.ChunkID)
 	if err != nil {
 		return domain.Evidence{}, err
 	}
-	for _, chunk := range chunks {
-		if chunk.ID == e.ChunkID {
-			if !matchesEvidence(e, chunk) {
-				return domain.Evidence{}, domain.ErrConflict
-			}
-			// Recheck after object I/O. A changed head is allowed for a fixed
-			// historical citation; deletion/revocation or generation changes aren't.
-			if _, err = s.db.RunEvidence(ctx, uid, wid, sid, rid, eid); err != nil {
-				return domain.Evidence{}, err
-			}
-			e.Content = chunk.Content
-			return e, nil
-		}
+	if !matchesEvidence(e, chunk) {
+		return domain.Evidence{}, domain.ErrConflict
 	}
-	return domain.Evidence{}, domain.ErrNotFound
+	// Recheck after the fixed SQL chunk read. A changed head is allowed for a
+	// historical citation; deletion/revocation or generation changes aren't.
+	if _, err = s.db.RunEvidence(ctx, uid, wid, sid, rid, eid); err != nil {
+		return domain.Evidence{}, err
+	}
+	e.Content = chunk.Content
+	return e, nil
 }
 
 func (s *server) answerCitations(ctx context.Context, request agent.Request, answer string) ([]evidenceView, error) {

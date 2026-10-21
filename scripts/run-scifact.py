@@ -192,7 +192,7 @@ def application_sha256():
 def reranker_environment(expected_enabled):
     settings = json.loads((RUNTIME / "settings.json").read_text())
     if (type(settings.get("rerank")) is not bool or settings["rerank"] != expected_enabled
-            or settings.get("chunking_strategy") != "structure_v2"):
+            or settings.get("chunking_strategy") != "parent_child_v1"):
         raise ValueError("evaluation stack retrieval settings differ from requested benchmark")
     result = {"enabled": expected_enabled, "chunking_strategy": settings["chunking_strategy"]}
     if not expected_enabled:
@@ -242,7 +242,7 @@ def main():
     parser.add_argument("--wait-for-existing-ingest", action="store_true", help="wait for a separately running ingest instead of starting a second process")
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/evaluations/scifact-qdrant")
     parser.add_argument("--rerank", action="store_true", help="enable the local reranker; default is the retrieval baseline")
-    parser.add_argument("--chunking-strategy", choices=("structure_v2",),
+    parser.add_argument("--chunking-strategy", choices=("parent_child_v1",),
                         help="otherwise reuse the stack's recorded strategy; old unrecorded caches require this flag")
     parser.add_argument("--model-ready-timeout", type=int, default=3600,
                         help="maximum seconds waiting for reranker download/load before evaluation")

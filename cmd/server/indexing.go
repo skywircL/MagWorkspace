@@ -70,12 +70,12 @@ func configureIndexing() (*indexSetup, error) {
 		return nil, errors.New("invalid QDRANT_URL or BM25_AVG_LEN")
 	}
 
-	if env("CHUNKING_STRATEGY", indexing.ChunkingStructure) != indexing.ChunkingStructure {
-		return nil, errors.New("CHUNKING_STRATEGY must be structure_v2; legacy indexing is retired")
+	if env("CHUNKING_STRATEGY", indexing.ChunkingParentChild) != indexing.ChunkingParentChild {
+		return nil, errors.New("CHUNKING_STRATEGY must be parent_child_v1; legacy indexing is retired")
 	}
-	profile, err := indexing.ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, env("CHUNKING_STRATEGY", indexing.ChunkingStructure))
+	profile, err := indexing.ProfileWithChunking(model, dimensions, parserURL, embeddingURL, vectorURL, avgLen, env("CHUNKING_STRATEGY", indexing.ChunkingParentChild))
 	if err != nil {
-		return nil, errors.New("CHUNKING_STRATEGY must be structure_v2")
+		return nil, errors.New("CHUNKING_STRATEGY must be parent_child_v1")
 	}
 	opts := indexing.Options{Workers: workers, MaxRetries: maxRetries, JobTimeout: timeout, Execution: execution}
 	if err := configureReranking(&opts); err != nil {

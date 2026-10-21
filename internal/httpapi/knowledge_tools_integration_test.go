@@ -170,18 +170,20 @@ func TestHTTPKnowledgeToolsMetadataWithoutIndexingAndHistoryScope(t *testing.T) 
 	f.request(t, "POST", sessionPath(session)+"/messages", owner.Token, map[string]any{"content": "followup", "document_ids": []string{}}, 201)
 }
 
-func TestHTTPKnowledgeToolsRecheckDeletionAfterObjectRead(t *testing.T) {
+func TestHTTPKnowledgeToolsRecheckDeletionAfterSQLRead(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "readdelete")
 	write := x.upload(t, owner, "住宿报销500元")
 	x.process(t)
 	session := x.session(t, owner, write.Document.WorkspaceID, "read race")
 	x.agent.set(func(ctx context.Context, req agent.Request) (agent.Result, error) {
-		x.objects.readHook(func(ctx context.Context, key string) error {
-			x.objects.readHook(nil)
-			return x.store.DeleteDocument(ctx, owner.User.ID, write.Document.WorkspaceID, write.Document.ID)
-		})
 		var read knowledgeReadResponse
+		if err := invokeKnowledgeTool(ctx, req, "read_document", map[string]any{"document_id": write.Document.ID}, &read); err != nil || len(read.Evidence) != 1 {
+			return agent.Result{}, fmt.Errorf("initial SQL-backed read failed: %v", err)
+		}
+		if err := x.store.DeleteDocument(ctx, owner.User.ID, write.Document.WorkspaceID, write.Document.ID); err != nil {
+			return agent.Result{}, err
+		}
 		err := invokeKnowledgeTool(ctx, req, "read_document", map[string]any{"document_id": write.Document.ID}, &read)
 		if !errors.Is(err, domain.ErrNotFound) {
 			return agent.Result{}, fmt.Errorf("deleted source exposed: %v", err)
@@ -189,7 +191,7 @@ func TestHTTPKnowledgeToolsRecheckDeletionAfterObjectRead(t *testing.T) {
 		return agent.Result{RunID: req.RunID, Answer: "source deleted", Mode: "demo"}, nil
 	})
 	// Even a model answer without a citation cannot publish after its observed
-	// metadata source was deleted while the document tool was running.
+	// metadata source was deleted after the SQL-backed tool read.
 	f := x.integrationFixture
 	response := f.request(t, "POST", sessionPath(session)+"/messages", owner.Token, map[string]any{"content": "read"}, 502)
 	if response.Error.Code != "invalid_citation" {

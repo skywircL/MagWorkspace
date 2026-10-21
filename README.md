@@ -8,7 +8,7 @@
 
 消息接口支持 SSE：添加 `Accept: text/event-stream` 可接收 Harness 原生文本增量；默认仍返回 JSON。实现与验证记录见 [迭代 002](docs/iterations/002-sse.md)。
 
-文档支持上传、标题修改、TXT/Markdown 在线编辑、历史版本与下载，内容更新通过当前版本 ID 检测冲突并自动排队索引。原始文件默认最大 50 MB，通过 `MAX_FILE_SIZE_MB` 配置（1–512，1 MB = 1,048,576 字节，修改后重启），在线正文最大 1 MiB，存入 MinIO；MySQL 仅负责业务状态与元数据。调用示例见 [文档 API](docs/api.md#文档与不可变版本)，更新验收见 [迭代 007](docs/iterations/007-document-updates.md)。
+文档支持上传、标题修改、TXT/Markdown 在线编辑、历史版本与下载，内容更新通过当前版本 ID 检测冲突并自动排队索引。原始文件默认最大 50 MB，通过 `MAX_FILE_SIZE_MB` 配置（1–512，1 MB = 1,048,576 字节，修改后重启），在线正文最大 1 MiB，原文件存入 MinIO；MySQL 保存业务状态、元数据及索引发布后的父子分块正文。调用示例见 [文档 API](docs/api.md#文档与不可变版本)，更新验收见 [迭代 007](docs/iterations/007-document-updates.md)。
 
 ## 启动
 
@@ -41,23 +41,23 @@ python3 scripts/dev-webui.py --backend http://127.0.0.1:8080 --port 5173
 
 | 服务 | 唯一职责 |
 |---|---|
-| MySQL | 用户、Workspace/权限、私有会话与提问状态、个人长期记忆与墓碑、文档及版本元数据、索引任务状态与发布记录、来源关系及待清理对象记录 |
-| MinIO | 原始文件、不可变解析正文与分块清单、待答复提问的私有执行快照 |
+| MySQL | 用户、Workspace/权限、私有会话与提问状态、个人长期记忆与墓碑、文档及版本元数据、父子分块正文及关系、索引任务状态与发布记录、来源关系及待清理对象记录 |
+| MinIO | 原始文件、私有执行快照与运行日志 |
 | Redis | Asynq 索引执行与去重、短期处理进度和 SSE 补发；可靠投递与重试预算由 MySQL outbox 持有 |
-| Qdrant | 内置多语言 BM25、向量索引与 RRF，可由原文重建 |
-| Ollama + bge-m3 | 本地生成 1024 维向量 |
-| TEI + mMARCO MiniLM | 对已召回且重新鉴权的片段进行相关性评分；不扫描全库，不写索引 |
+| Qdrant | 子块的内置多语言 BM25、向量索引与 RRF，可由原文重建 |
+| Ollama + bge-m3 | 为子块和查询本地生成 1024 维向量 |
+| TEI + mMARCO MiniLM | 对已召回且重新鉴权的子块进行相关性评分；不扫描全库，不写索引 |
 | Tika | 在受限容器中解析 PDF / DOCX；TXT / Markdown 在 Go 内处理 |
 
 上传成功即排队，查询版本 `/index` 观察 `queued/running/ready/failed`。检索支持 `lexical/vector/hybrid`，默认 hybrid；只返回当前版本的已发布索引，引用固定版本与分块。失败任务通过同一版本 POST `/index` 重试。详见 [API](docs/api.md#文档处理与检索)。
 
-解析上限 1 MiB UTF-8 文本；默认结构优先分块，每块最多 800 Unicode 字符、语义重叠最多 100 字符，尽量保留标题、句子及可容纳的 Markdown 表格/代码块；不支持 OCR。`CHUNKING_STRATEGY` 只允许 `structure_v2`，旧策略配置会拒绝启动。2026-10-20 已按用户要求清空旧原文、版本和索引，从空知识库开始；旧文档引用不再可读。实现、兼容与验证见[分块迭代](docs/iterations/031-structure-aware-chunking.md)。任意格式仍可保存，无法解析的版本会保留原文并将索引标记失败。关闭 `DOCUMENT_INDEXING_ENABLED` 可停止自动入队与检索，但文档原文仍需要 MinIO。不要同时变更正在使用的 embedding 模型标签内容；更换 embedding、解析或分块索引配置后生成独立 profile，旧版本需显式重新提交索引。
+解析上限 1 MiB UTF-8 文本；唯一策略 `CHUNKING_STRATEGY=parent_child_v1`，结构优先切父块（最多4096 Unicode字符、无重叠），再在父内切子块（384字符、语义重叠最多76），总计最多8192块。父子正文、偏移、摘要和章节路径保存在MySQL，只有子块送入Qdrant；检索与重排按子块评分、同父合并，再返回完整父正文及其引用身份。阅读和引用回查不下载MinIO清单、不重新分块。原文件继续保存在MinIO；不支持OCR。旧策略拒绝启动，旧测试数据按本轮授权清理，重新上传即可按新策略处理。实现与验收见[父子分块迭代](docs/iterations/036-parent-child-chunks.md)。无法解析的版本保留原文并标记失败。关闭 `DOCUMENT_INDEXING_ENABLED` 可停止自动入队与检索；原文件下载仍需要MinIO。更换embedding或解析配置生成独立profile，旧版本需要显式重新提交索引。
 
-MySQL 没有分块正文表或全文索引。历史内联内容字段仅用于升级兼容，新服务写入空值并保存 MinIO 对象引用。外部搜索内容不会直接当成可信引用；返回前重新核验数据库权限和发布记录，并校验 MinIO 清单摘要。服务职责、清理与恢复限制见 [存储与索引决策](docs/decisions/005-processing-storage.md)。
+MySQL `chunks.content` 保存父子正文，全部分块与索引 ready 状态在同一事务发布；MySQL 不实现文档全文索引。外部搜索结果仅作候选 ID 提示，返回前从 MySQL 回读正文，重新核验权限、版本、发布 generation、摘要与父子关系。旧单层索引与清单格式不兼容；本轮测试文档及派生数据清理保留账号、Workspace、聊天和长期记忆，旧文档来源的聊天引用失效。服务职责、清理与兼容边界见[父子分块决策](docs/decisions/026-parent-child-relational-chunks.md)。
 
 ## 召回与重排
 
-Compose 默认启用本地重排：关键词与向量候选经 RRF 融合后，先可信回读，再构造“当前文档标题＋章节路径＋清洗正文”，调用重排模型，完成阈值筛选、综合评分和 MMR 去冗余。检索 API 与聊天使用的 Agent 检索工具共用实现。章节路径只作为临时评分输入，引用仍使用原始 chunk 字节与摘要。
+Compose 默认启用本地重排：关键词与向量子候选经 RRF 融合后，先可信回读，再构造“当前文档标题＋章节路径＋清洗后的子块正文”，调用重排模型，完成阈值筛选、综合评分和 MMR 去冗余。同父保留最强子块，再选择不同父块 Top K；检索 API 与 Agent 工具共用实现。章节路径独立保存，评分输入不改写正文；返回的父引用使用真实父块 ID、字节与摘要。
 
 默认最多给模型20个候选，可配置到200；混合RRF先除以两路第一的理论得分 `2/61`，重排不再按候选最大分缩放；模型相关性分数、该检索分数与来源权重按0.6/0.3/0.1合成，MMR使用正文的中文词项Jaccard相似度。模型失败或超时退回已验证的召回结果；模型成功但相关性过低可以返回空结果，两者在API诊断中明确区分。接口字段、阈值与分数含义见[检索API](docs/api.md#文档处理与检索)。
 
@@ -90,7 +90,7 @@ live SSE 与 live JSON 均使用 Harness 的 `DeepSeekChatModel`，上游需要�
 
 修改模型/预算配置后更新 `harness` 容器；模式、服务凭据或通信地址变更时同时更新 `backend`。Magent 提供 `search_knowledge`、`read_document`、`list_documents`、`search_conversations` 和 `ask_user`；Go 根据认证身份和 Run 文档范围处理请求。关闭索引时目录、历史会话和提问仍可用。`ask_user` 持久暂停，用户答复后恢复同一 Run；详见 [工具与提问 API](docs/api.md#agent-工具与用户提问)。新增 `create_document` / `update_document`，每次写入均通过原生 tool_approval 持久暂停，批准后追加不可变版本；详见[文档写入与审批](docs/api.md#agent-文档写入与审批)。支持小型TXT/Markdown原文分页、JSON/SSE批准或拒绝及持久写入回执；前端已接入完整审批展示。
 
-回答使用 `[E:<32位证据ID>]` 引用本次 Run 实际获得的固定版本原文；JSON 和 SSE `run.completed` 均返回 `citations`，可按其中的 `passage_url` 获取原文片段，按 `source_url` 下载固定版本。引用读取重新鉴权并校验 MinIO 清单。文档换头不会改变旧引用，软删除后不可读取。定位为抽取文本的 UTF-8 字节区间，暂不提供 PDF 页码/高亮区域。
+回答使用 `[E:<32位证据ID>]` 引用本次 Run 实际获得的固定版本原文；JSON 和 SSE `run.completed` 均返回 `citations`，可按其中的 `passage_url` 获取原文片段，按 `source_url` 下载固定版本。引用读取重新鉴权并校验 MySQL 中固定 generation 的正文与摘要。新策略下文档换头不会改变历史父引用，软删除后不可读取。定位为抽取文本的 UTF-8 字节区间，暂不提供 PDF 页码/高亮区域。
 
 消息请求可带 `document_ids`：省略或 null 表示当前有权读取的 Workspace，`[]` 表示无文档，非空数组限制到指定文档（最多100个、不重复）。来源限制同时用于工具、最终提交和后续模型历史；旧回答从已删除或超出范围来源派生时，过滤发送给模型的回合，数据库历史保留。demo 模式用真实工具结果生成确定性引用，仍不调用模型。详见 [可信引用 API](docs/api.md#可信检索与引用)。
 

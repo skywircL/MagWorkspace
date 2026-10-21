@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,14 +16,29 @@ func testIndexProfile() domain.IndexProfile {
 	return domain.IndexProfile{ID: strings.Repeat("a", 64), Model: "test-embedding", Dimensions: 3}
 }
 
-const testManifestSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-
-func testManifestKey(job domain.IndexJob) string {
-	return "indexes/" + job.ProfileID + "/" + job.Generation + "/manifest.json"
+func testIndexChunks(job domain.IndexJob, content string) []domain.IndexChunk {
+	if content == "" {
+		content = "source"
+	}
+	digest := sha256.Sum256([]byte(content))
+	parent := domain.IndexChunk{IndexID: job.ID, Generation: job.Generation, DocumentID: job.DocumentID, VersionID: job.VersionID, SourceSHA256: job.SourceSHA256, Kind: "parent", ParentOrdinal: -1, StartByte: 0, EndByte: len(content), Content: content, SHA256: hex.EncodeToString(digest[:])}
+	identity := sha256.Sum256([]byte(job.ID + job.Generation + "parent" + content))
+	parent.ID = hex.EncodeToString(identity[:16])
+	child := parent
+	child.Kind = "child"
+	child.ParentID = parent.ID
+	child.ParentOrdinal = 0
+	identity = sha256.Sum256([]byte(job.ID + job.Generation + "child" + content))
+	child.ID = hex.EncodeToString(identity[:16])
+	return []domain.IndexChunk{parent, child}
 }
 
 func finishTestIndex(s *Store, job domain.IndexJob) error {
-	return s.FinishDocumentIndex(context.Background(), job, testManifestKey(job), testManifestSHA, 1)
+	var content []byte
+	if err := s.pool.QueryRowContext(context.Background(), `SELECT COALESCE(content,'') FROM document_versions WHERE id=?`, job.VersionID).Scan(&content); err != nil {
+		return dbError(err)
+	}
+	return s.FinishDocumentIndex(context.Background(), job, testIndexChunks(job, string(content)))
 }
 
 func publishTestIndex(t *testing.T, s *Store, userID, workspaceID string, write domain.DocumentWrite, profile domain.IndexProfile) domain.IndexJob {
@@ -337,12 +354,12 @@ func TestMySQLIndexScopeResolvesOnlyCurrentAuthorizedManifests(t *testing.T) {
 	wantError(t, err, domain.ErrInvalid)
 }
 
-func TestMySQLIndexManifestValidationAndPublicationRollback(t *testing.T) {
+func TestMySQLIndexChunkValidationAndPublicationRollback(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
 	u, w := testUser(t, s, "finishvalidation")
 	profile := testIndexProfile()
-	write, err := s.CreateDocument(ctx, u.ID, w.ID, "Validate manifest", "source.txt", []byte("source"))
+	write, err := s.CreateDocument(ctx, u.ID, w.ID, "Validate chunks", "source.txt", []byte("source"))
 	must(t, err)
 	_, _, err = s.EnqueueDocumentIndex(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, profile)
 	must(t, err)
@@ -351,20 +368,19 @@ func TestMySQLIndexManifestValidationAndPublicationRollback(t *testing.T) {
 	if input == nil {
 		t.Fatal("missing job")
 	}
-	key := testManifestKey(input.Job)
-	for _, bad := range []struct {
-		key, hash string
-		count     int
-	}{
-		{"../manifest.json", testManifestSHA, 1},
-		{"indexes/another/manifest.json", testManifestSHA, 1},
-		{key, "invalid", 1},
-		{key, strings.Repeat("C", 64), 1},
-		{key, testManifestSHA, 0},
-		{key, testManifestSHA, domain.MaxIndexChunks + 1},
+	for _, change := range []func([]domain.IndexChunk){
+		func(c []domain.IndexChunk) { c[0].SHA256 = "invalid" },
+		func(c []domain.IndexChunk) { c[1].ParentID = strings.Repeat("f", 32) },
+		func(c []domain.IndexChunk) { c[1].Generation = strings.Repeat("f", 32) },
+		func(c []domain.IndexChunk) { c[1].Content = "forged" },
+		func(c []domain.IndexChunk) { c[1].Ordinal = 1 },
+		func(c []domain.IndexChunk) { c[0].Kind = "unknown" },
 	} {
-		wantError(t, s.FinishDocumentIndex(ctx, input.Job, bad.key, bad.hash, bad.count), domain.ErrInvalid)
+		chunks := testIndexChunks(input.Job, "source")
+		change(chunks)
+		wantError(t, s.FinishDocumentIndex(ctx, input.Job, chunks), domain.ErrInvalid)
 	}
+	wantError(t, s.FinishDocumentIndex(ctx, input.Job, nil), domain.ErrInvalid)
 	forged := input.Job
 	forged.SourceSHA256 = strings.Repeat("f", 64)
 	wantError(t, finishTestIndex(s, forged), domain.ErrConflict)
@@ -374,20 +390,30 @@ func TestMySQLIndexManifestValidationAndPublicationRollback(t *testing.T) {
 	_, err = s.pool.ExecContext(ctx, `CREATE TRIGGER test_publication_failure BEFORE UPDATE ON document_indexes FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='forced publication failure'`)
 	must(t, err)
 	if err = finishTestIndex(s, input.Job); err == nil {
-		t.Fatal("expected manifest publication failure")
+		t.Fatal("expected publication failure")
 	}
 	unchanged, err := s.DocumentIndex(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, profile.ID)
 	must(t, err)
-	if !reflect.DeepEqual(unchanged, input.Job) || unchanged.ArtifactKey != "" || unchanged.ArtifactSHA256 != "" || unchanged.ChunkCount != 0 {
-		t.Fatalf("failed publication exposed manifest or changed task state: %+v", unchanged)
+	if !reflect.DeepEqual(unchanged, input.Job) || unchanged.ChunkCount != 0 || unchanged.ParentCount != 0 {
+		t.Fatalf("failed publication changed task state: %+v", unchanged)
+	}
+	var count int
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM chunks`).Scan(&count))
+	if count != 0 {
+		t.Fatal("failed publication left partial chunks")
 	}
 	_, err = s.pool.ExecContext(ctx, `DROP TRIGGER test_publication_failure`)
 	must(t, err)
 	must(t, finishTestIndex(s, input.Job))
 	ready, err := s.DocumentIndexByID(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, input.Job.ID)
 	must(t, err)
-	if ready.Status != "ready" || ready.ArtifactKey != key || ready.ArtifactSHA256 != testManifestSHA || ready.ChunkCount != 1 {
-		t.Fatalf("manifest metadata was not published together: %+v", ready)
+	if ready.Status != "ready" || ready.ChunkCount != 1 || ready.ParentCount != 1 {
+		t.Fatalf("chunk counts were not published together: %+v", ready)
+	}
+	stored, err := s.ReadIndexChunks(ctx, u.ID, w.ID, ready, nil)
+	must(t, err)
+	if !reflect.DeepEqual(stored, testIndexChunks(ready, "source")) {
+		t.Fatalf("chunk bodies did not publish: %+v", stored)
 	}
 	checkDocumentContent(t, s, u.ID, w.ID, write.Version, []byte("source"))
 }
@@ -530,7 +556,7 @@ func TestMySQLIndexFailureRetainsCleanupLeaseAndGrace(t *testing.T) {
 func TestMySQLIndexMigrationPreservesV2AndRetriesPartialDDL(t *testing.T) {
 	s, dsn := testStore(t)
 	ctx := context.Background()
-	for _, table := range []string{"index_outbox", "document_indexes", "index_cleanup"} {
+	for _, table := range []string{"chunks", "index_outbox", "document_indexes", "index_cleanup"} {
 		_, err := s.pool.ExecContext(ctx, `DROP TABLE `+table)
 		must(t, err)
 	}

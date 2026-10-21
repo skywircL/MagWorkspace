@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"magworkspace/internal/domain"
@@ -98,8 +99,32 @@ func (s *Store) CompleteIndexCleanup(ctx context.Context, id string) error {
 	if !validHexID(id) {
 		return domain.ErrInvalid
 	}
-	_, err := s.pool.ExecContext(ctx, `DELETE FROM index_cleanup WHERE id=?`, id)
-	return dbError(err)
+	return s.transaction(ctx, func(tx *sql.Tx) error {
+		var profileID, generation string
+		var due bool
+		err := tx.QueryRowContext(ctx, `SELECT profile_id,generation,not_before<=UTC_TIMESTAMP(6) FROM index_cleanup WHERE id=? FOR UPDATE`, id).Scan(&profileID, &generation, &due)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !due {
+			return nil
+		}
+		var protected bool
+		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id WHERE i.profile_id=? AND i.generation=? AND d.deleted_at IS NULL AND (i.status='ready' OR (i.status='running' AND i.lease_expires_at>UTC_TIMESTAMP(6))))`, profileID, generation).Scan(&protected); err != nil {
+			return err
+		}
+		if protected {
+			return nil
+		}
+		if _, err = tx.ExecContext(ctx, `DELETE c FROM chunks c JOIN document_indexes i ON i.id=c.index_id WHERE i.profile_id=? AND c.generation=?`, profileID, generation); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM index_cleanup WHERE id=?`, id)
+		return err
+	})
 }
 
 // DeferIndexCleanup lets other eligible generations progress after a failed
