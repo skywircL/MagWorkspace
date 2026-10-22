@@ -34,7 +34,7 @@ func (c *lostHarnessResult) Run(ctx context.Context, request agent.Request) (age
 	return result, err
 }
 
-// Actual HTTP, MySQL, object-backed journal, ProcessClient and Harness run here.
+// Actual HTTP, MySQL, database-backed journal, ProcessClient and Harness run here.
 // Only the model provider and external index/object services are local fixtures.
 func TestHTTPWorkspaceRealHarnessJournalRecovery(t *testing.T) {
 	for _, crashPoint := range []string{"after_tool_round", "after_completed_commit"} {
@@ -248,13 +248,8 @@ func assertJournalResponsePrivate(t *testing.T, raw []byte) {
 
 func assertHarnessJournalFacts(t *testing.T, x *indexFixture, runID string, completed bool) {
 	t.Helper()
-	x.objects.mu.Lock()
-	defer x.objects.mu.Unlock()
 	toolResults, rounds, terminals := 0, 0, 0
-	for key, raw := range x.objects.data {
-		if !strings.HasPrefix(key, "runs/"+runID+"/journal/") {
-			continue
-		}
+	for _, raw := range storedJournalFacts(t, x, runID) {
 		var record struct {
 			Kind string `json:"kind"`
 			Data struct {

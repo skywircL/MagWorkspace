@@ -49,46 +49,11 @@ func validPrompt(in domain.SuspendedPrompt) bool {
 	return in.ExpiresAt.After(now) && !in.ExpiresAt.After(now.Add(7*24*time.Hour+time.Minute))
 }
 
-// SuspendRun publishes the prompt only after the private snapshot is durable.
-// The cleanup reservation survives process death, failed uploads and cascades.
+// SuspendRun atomically commits the private snapshot, prompt and run state.
 func (s *Store) SuspendRun(ctx context.Context, uid, wid, sid, rid, mode string, in domain.SuspendedPrompt) (domain.RunPrompt, error) {
 	var result domain.RunPrompt
 	if !validPrompt(in) || (mode != "demo" && mode != "live") {
 		return result, domain.ErrInvalid
-	}
-	if s.objects == nil {
-		return result, blob.ErrUnavailable
-	}
-	key := "runs/" + rid + "/prompts/" + in.ID + "/snapshot"
-	reservation, err := newID()
-	if err != nil {
-		return result, err
-	}
-	err = s.transaction(ctx, func(tx *sql.Tx) error {
-		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
-			return err
-		}
-		if _, err := prepareApprovalTx(ctx, tx, uid, wid, sid, rid, in); err != nil {
-			return err
-		}
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_prompts WHERE run_id=?`, rid).Scan(&count); err != nil {
-			return err
-		}
-		if count >= 16 {
-			return domain.ErrInvalid
-		}
-		_, err := tx.ExecContext(ctx, `INSERT INTO object_cleanup(id,object_key,available_at) VALUES(?,?,DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 5 MINUTE))`, reservation, key)
-		return err
-	})
-	if err != nil {
-		return result, err
-	}
-	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err = s.objects.Put(uploadCtx, key, []byte(in.Snapshot))
-	cancel()
-	if err != nil {
-		return result, err
 	}
 	digest := sha256.Sum256([]byte(in.Snapshot))
 	options := in.Options
@@ -96,7 +61,7 @@ func (s *Store) SuspendRun(ctx context.Context, uid, wid, sid, rid, mode string,
 		options = []string{}
 	}
 	rawOptions, _ := json.Marshal(options)
-	err = s.transaction(ctx, func(tx *sql.Tx) error {
+	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
 			return err
 		}
@@ -115,22 +80,17 @@ func (s *Store) SuspendRun(ctx context.Context, uid, wid, sid, rid, mode string,
 		if err != nil {
 			return err
 		}
-		// Retain the durable cleanup record until expiry, including after deletion.
-		changed, err := tx.ExecContext(ctx, `UPDATE object_cleanup SET available_at=? WHERE id=? AND state='pending' AND available_at>UTC_TIMESTAMP(6)`, in.ExpiresAt.Add(time.Hour), reservation)
-		if err != nil {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_prompts WHERE run_id=?`, rid).Scan(&count); err != nil {
 			return err
 		}
-		n, err := changed.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return domain.ErrConflict
+		if count >= 16 {
+			return domain.ErrInvalid
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE run_prompts SET status='done' WHERE run_id=? AND status='resuming'`, rid); err != nil {
 			return err
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO run_prompts(id,run_id,tool_call_id,question,options,answer,snapshot_key,snapshot_sha256,snapshot_size,expires_at) VALUES(?,?,?,?,?,'',?,?,?,?)`, in.ID, rid, in.ToolCallID, in.Question, rawOptions, key, hex.EncodeToString(digest[:]), len(in.Snapshot), in.ExpiresAt); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO run_prompts(id,run_id,tool_call_id,question,options,answer,snapshot,snapshot_sha256,snapshot_size,expires_at) VALUES(?,?,?,?,?,'',?,?,?,?)`, in.ID, rid, in.ToolCallID, in.Question, rawOptions, []byte(in.Snapshot), hex.EncodeToString(digest[:]), len(in.Snapshot), in.ExpiresAt); err != nil {
 			return err
 		}
 		if approval != nil {
@@ -145,9 +105,6 @@ func (s *Store) SuspendRun(ctx context.Context, uid, wid, sid, rid, mode string,
 		result, err = scanPrompt(tx.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM run_prompts p JOIN runs r ON r.id=p.run_id WHERE p.id=?`, in.ID))
 		return err
 	})
-	if err != nil {
-		s.abandonDocumentObject(key)
-	}
 	if err == nil && result.Approval != nil {
 		result.Approval.Arguments, err = approvalArguments(in.Snapshot, in.ToolCallID, result.Approval.Tool)
 	}
@@ -188,8 +145,8 @@ func (s *Store) RunPrompt(ctx context.Context, uid, wid, sid, rid, pid string) (
 	return result, err
 }
 
-// ResumePrompt first verifies remote bytes, then claims exactly one answer.
-// A crashed execution is failed by the normal run lease, never replayed.
+// ResumePrompt verifies database snapshot bytes and claims exactly one answer atomically.
+// Lease expiry fails a crashed execution; recovery requires a new explicit claim.
 func (s *Store) ResumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answer string, lease time.Duration) (domain.ResumedRun, error) {
 	return s.resumePrompt(ctx, uid, wid, sid, rid, pid, answer, lease, false)
 }
@@ -207,43 +164,8 @@ func (s *Store) resumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answe
 	if !validText(answer, 4096) || !utf8.ValidString(answer) || lease <= 0 {
 		return out, domain.ErrInvalid
 	}
-	if s.objects == nil {
-		return out, blob.ErrUnavailable
-	}
-	var key, sha string
-	var size int
 	var prompt domain.RunPrompt
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
-		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, false); err != nil {
-			return err
-		}
-		var err error
-		prompt, err = scanPrompt(tx.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM run_prompts p JOIN runs r ON r.id=p.run_id WHERE p.id=? AND p.run_id=?`, pid, rid))
-		if err != nil {
-			return err
-		}
-		if (prompt.Approval != nil) != approval {
-			return domain.ErrInvalid
-		}
-		if prompt.Status != "pending" || !prompt.ExpiresAt.After(time.Now()) {
-			return domain.ErrConflict
-		}
-		return tx.QueryRowContext(ctx, `SELECT snapshot_key,snapshot_sha256,snapshot_size FROM run_prompts WHERE id=?`, pid).Scan(&key, &sha, &size)
-	})
-	if err != nil {
-		return out, err
-	}
-	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	raw, err := s.objects.Read(readCtx, key, domain.MaxRunSnapshotBytes)
-	cancel()
-	if err != nil {
-		return out, err
-	}
-	digest := sha256.Sum256(raw)
-	if len(raw) != size || hex.EncodeToString(digest[:]) != sha {
-		return out, blob.ErrIntegrity
-	}
-	err = s.transaction(ctx, func(tx *sql.Tx) error {
 		var err error
 		out.Role, err = lockWorkspace(ctx, tx, uid, wid)
 		if err != nil {
@@ -255,6 +177,9 @@ func (s *Store) resumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answe
 		var status string
 		var active bool
 		if err = tx.QueryRowContext(ctx, `SELECT status,lease_expires_at>UTC_TIMESTAMP(6) FROM runs WHERE id=? AND session_id=? FOR UPDATE`, rid, sid).Scan(&status, &active); err != nil {
+			return err
+		}
+		if err = assertRunExecutionTx(ctx, tx, rid); err != nil {
 			return err
 		}
 		if status != "suspended" || !active {
@@ -269,6 +194,10 @@ func (s *Store) resumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answe
 		}
 		if prompt.Status != "pending" || !prompt.ExpiresAt.After(time.Now()) {
 			return domain.ErrConflict
+		}
+		raw, err := readRunSnapshotTx(ctx, tx, pid, rid)
+		if err != nil {
+			return err
 		}
 		out.DocumentIDs, err = runDocumentScopeTx(ctx, tx, rid)
 		if err != nil {
@@ -425,4 +354,19 @@ func nativeAnsweredPrompt(prompt domain.RunPrompt, uid, wid, sid, rid string, ra
 		"request": request, "status": "answered", "snapshot": string(raw), "response": response,
 		"created_at": float64(prompt.CreatedAt.UnixMicro()) / 1e6, "expires_at": float64(prompt.ExpiresAt.UnixMicro()) / 1e6, "resolved_at": float64(time.Now().UnixMicro()) / 1e6, "resolved_by": uid, "close_reason": "",
 	})
+}
+
+// readRunSnapshotTx is private: callers must authorize and lock the run first.
+func readRunSnapshotTx(ctx context.Context, tx *sql.Tx, pid, rid string) ([]byte, error) {
+	var raw []byte
+	var sha string
+	var size int
+	if err := tx.QueryRowContext(ctx, `SELECT LEFT(snapshot,?),snapshot_sha256,snapshot_size FROM run_prompts WHERE id=? AND run_id=?`, domain.MaxRunSnapshotBytes+1, pid, rid).Scan(&raw, &sha, &size); err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(raw)
+	if len(raw) != size || size < 1 || size > domain.MaxRunSnapshotBytes || hex.EncodeToString(digest[:]) != sha {
+		return nil, blob.ErrIntegrity
+	}
+	return raw, nil
 }

@@ -25,8 +25,6 @@ func TestMySQLPromptsPersistResumeOnceAndHistory(t *testing.T) {
 	s, dsn := testStore(t)
 	ctx := context.Background()
 	u, w := testUser(t, s, "promptpersist")
-	objects := newMemoryObjects()
-	s.SetObjectStorage(objects)
 	session, err := s.CreateSession(ctx, u.ID, w.ID, "澄清")
 	must(t, err)
 	run, _, _, err := s.BeginRun(ctx, u.ID, w.ID, session.ID, "住宿标准", time.Minute, []string{})
@@ -48,7 +46,6 @@ func TestMySQLPromptsPersistResumeOnceAndHistory(t *testing.T) {
 	reopened, err := Open(ctx, dsn)
 	must(t, err)
 	defer reopened.Close()
-	reopened.SetObjectStorage(objects)
 	p, err = reopened.RunPrompt(ctx, u.ID, w.ID, session.ID, run.ID, in.ID)
 	must(t, err)
 	if p.Status != "pending" {
@@ -95,8 +92,6 @@ func TestMySQLPromptsCancelExpireRevokeAndIntegrity(t *testing.T) {
 	ctx := context.Background()
 	owner, w := testUser(t, s, "promptowner")
 	other, _ := testUser(t, s, "promptother")
-	objects := newMemoryObjects()
-	s.SetObjectStorage(objects)
 	_, err := s.AddMember(ctx, owner.ID, w.ID, other.Email, "viewer")
 	must(t, err)
 	create := func(uid string) (domain.Session, domain.Run, domain.SuspendedPrompt) {
@@ -134,13 +129,8 @@ func TestMySQLPromptsCancelExpireRevokeAndIntegrity(t *testing.T) {
 		t.Fatal("revoked user resumed")
 	}
 	ss, r, in = create(owner.ID)
-	objects.mu.Lock()
-	for key := range objects.data {
-		if strings.Contains(key, in.ID) {
-			objects.data[key] = []byte(`{"modified":true}`)
-		}
-	}
-	objects.mu.Unlock()
+	_, err = s.pool.ExecContext(ctx, `UPDATE run_prompts SET snapshot_sha256=REPEAT('0',64) WHERE id=?`, in.ID)
+	must(t, err)
 	if _, err = s.ResumePrompt(ctx, owner.ID, w.ID, ss.ID, r.ID, in.ID, "x", time.Minute); !errors.Is(err, blob.ErrIntegrity) {
 		t.Fatalf("corrupt snapshot accepted: %v", err)
 	}
@@ -151,40 +141,38 @@ func TestMySQLPromptsCancelExpireRevokeAndIntegrity(t *testing.T) {
 	}
 }
 
-func TestMySQLPromptsObjectFailureAndCleanup(t *testing.T) {
+func TestMySQLPromptsAtomicDatabaseStorageAndCascade(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	u, w := testUser(t, s, "promptcleanup")
-	objects := newMemoryObjects()
-	s.SetObjectStorage(objects)
+	u, w := testUser(t, s, "promptatomic")
 	ss, err := s.CreateSession(ctx, u.ID, w.ID, "Q")
 	must(t, err)
 	r, _, _, err := s.BeginRun(ctx, u.ID, w.ID, ss.ID, "Q", time.Minute)
 	must(t, err)
-	objects.putHook = func(context.Context, string) error { return blob.ErrUnavailable }
-	if _, err = s.SuspendRun(ctx, u.ID, w.ID, ss.ID, r.ID, "demo", promptInput(t)); !errors.Is(err, blob.ErrUnavailable) {
-		t.Fatal("upload failure ignored")
-	}
-	got, err := s.Run(ctx, u.ID, w.ID, ss.ID, r.ID)
+	_, err = s.pool.ExecContext(ctx, `CREATE TRIGGER reject_suspend BEFORE UPDATE ON runs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='forced failure'`)
 	must(t, err)
-	if got.Status != "running" {
-		t.Fatal("failed upload published suspension")
-	}
-	objects.putHook = nil
 	in := promptInput(t)
+	if _, err = s.SuspendRun(ctx, u.ID, w.ID, ss.ID, r.ID, "demo", in); err == nil {
+		t.Fatal("database failure ignored")
+	}
+	var count int
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_prompts WHERE run_id=?`, r.ID).Scan(&count))
+	if count != 0 {
+		t.Fatal("snapshot committed without suspended run")
+	}
+	_, err = s.pool.ExecContext(ctx, `DROP TRIGGER reject_suspend`)
+	must(t, err)
 	_, err = s.SuspendRun(ctx, u.ID, w.ID, ss.ID, r.ID, "demo", in)
 	must(t, err)
-	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND)`)
-	must(t, err)
-	must(t, s.CleanupObjects(ctx))
-	if objects.count() != 1 {
-		t.Fatalf("cleanup removed live snapshot or retained orphan: %d", objects.count())
+	var raw string
+	must(t, s.pool.QueryRowContext(ctx, `SELECT snapshot FROM run_prompts WHERE id=?`, in.ID).Scan(&raw))
+	if raw != in.Snapshot {
+		t.Fatal("database did not preserve snapshot bytes")
 	}
+	assertObjectQueueCount(t, s, 0)
 	must(t, s.DeleteSession(ctx, u.ID, w.ID, ss.ID))
-	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND)`)
-	must(t, err)
-	must(t, s.CleanupObjects(ctx))
-	if objects.count() != 0 {
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_prompts WHERE id=?`, in.ID).Scan(&count))
+	if count != 0 {
 		t.Fatal("deleted session snapshot leaked")
 	}
 }

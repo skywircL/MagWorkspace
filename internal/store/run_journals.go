@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -51,12 +50,7 @@ func assertRunExecutionTx(ctx context.Context, tx *sql.Tx, rid string) error {
 	return nil
 }
 
-func (s *Store) RunPersistenceEnabled() bool { return s.objects != nil }
-
 func (s *Store) BeginRunJournal(ctx context.Context, uid, wid, sid, rid string) (uint64, error) {
-	if s.objects == nil {
-		return 0, blob.ErrUnavailable
-	}
 	var generation uint64
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
@@ -91,9 +85,6 @@ func lockJournalHead(ctx context.Context, tx *sql.Tx, rid string, generation uin
 // RunJournal is an internal capability callback. Caller identity and generation
 // are bound by Go, never chosen by the Python model or tool arguments.
 func (s *Store) RunJournal(ctx context.Context, uid, wid, sid, rid string, generation uint64, op string, args json.RawMessage) (any, error) {
-	if s.objects == nil {
-		return nil, blob.ErrUnavailable
-	}
 	if generation == 0 {
 		return nil, domain.ErrConflict
 	}
@@ -223,34 +214,6 @@ func (s *Store) appendRunJournal(ctx context.Context, uid, wid, sid, rid string,
 	}
 	// Preserve Python's canonical number and Unicode spelling, which binds digest.
 	content := append(append([]byte{}, raw...), '\n')
-	reservation, err := newID()
-	if err != nil {
-		return nil, err
-	}
-	key := fmt.Sprintf("runs/%s/journal/%020d-%s", rid, record.Seq, reservation)
-	err = s.transaction(ctx, func(tx *sql.Tx) error {
-		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
-			return err
-		}
-		head, err := lockJournalHead(ctx, tx, rid, generation)
-		if err != nil {
-			return err
-		}
-		if record.Seq != head.seq+1 || record.Previous != head.digest || head.total+len(content) > maxJournalBytes {
-			return domain.ErrConflict
-		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO object_cleanup(id,object_key,available_at) VALUES(?,?,DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 5 MINUTE))`, reservation, key)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	uploadCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	err = s.objects.Put(uploadCtx, key, content)
-	cancel()
-	if err != nil {
-		return nil, err
-	}
 	digest := sha256.Sum256(content)
 	err = s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
@@ -263,40 +226,21 @@ func (s *Store) appendRunJournal(ctx context.Context, uid, wid, sid, rid string,
 		if record.Seq != head.seq+1 || record.Previous != head.digest || head.total+len(content) > maxJournalBytes {
 			return domain.ErrConflict
 		}
-		// Cleanup may claim an expired reservation; a late publisher must then fail.
-		changed, err := tx.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 1 DAY) WHERE id=? AND state='pending' AND available_at>UTC_TIMESTAMP(6)`, reservation)
-		if err != nil {
-			return err
-		}
-		n, err := changed.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return domain.ErrConflict
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO run_journal_records(run_id,seq,digest,object_key,object_sha256,size_bytes) VALUES(?,?,?,?,?,?)`, rid, record.Seq, record.Digest, key, hex.EncodeToString(digest[:]), len(content)); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO run_journal_records(run_id,seq,digest,content,content_sha256,size_bytes) VALUES(?,?,?,?,?,?)`, rid, record.Seq, record.Digest, content, hex.EncodeToString(digest[:]), len(content)); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE run_journal_heads SET seq=?,digest=?,total_bytes=total_bytes+? WHERE run_id=? AND execution_generation=?`, record.Seq, record.Digest, len(content), rid, generation)
 		return err
 	})
 	if err != nil {
-		s.abandonDocumentObject(key)
 		return nil, err
 	}
 	return json.RawMessage(append([]byte{}, raw...)), nil
 }
 
-type journalObject struct {
-	seq              uint64
-	digest, key, sha string
-	size             int
-}
-
 func (s *Store) loadRunJournal(ctx context.Context, uid, wid, sid, rid string, generation uint64) (any, error) {
 	var head journalHead
-	objects := []journalObject{}
+	records := []json.RawMessage{}
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
 			return err
@@ -306,51 +250,48 @@ func (s *Store) loadRunJournal(ctx context.Context, uid, wid, sid, rid string, g
 		if err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT seq,digest,object_key,object_sha256,size_bytes FROM run_journal_records WHERE run_id=? ORDER BY seq`, rid)
+		// Read one sentinel byte beyond the per-record limit so corrupt SQL
+		// values cannot force unbounded materialization before validation.
+		rows, err := tx.QueryContext(ctx, `SELECT seq,digest,LEFT(content,?),content_sha256,size_bytes FROM run_journal_records WHERE run_id=? ORDER BY seq`, maxJournalRecordBytes+2, rid)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
+		total, previous := 0, ""
 		for rows.Next() {
-			var item journalObject
-			if err = rows.Scan(&item.seq, &item.digest, &item.key, &item.sha, &item.size); err != nil {
+			var seq uint64
+			var digest, sha string
+			var size int
+			var content []byte
+			if err = rows.Scan(&seq, &digest, &content, &sha, &size); err != nil {
 				return err
 			}
-			objects = append(objects, item)
+			if seq != uint64(len(records)+1) || size < 1 || size > maxJournalRecordBytes+1 || len(content) != size {
+				return blob.ErrIntegrity
+			}
+			sum := sha256.Sum256(content)
+			total += len(content)
+			if total > maxJournalBytes || hex.EncodeToString(sum[:]) != sha || content[len(content)-1] != '\n' {
+				return blob.ErrIntegrity
+			}
+			raw := content[:len(content)-1]
+			record, err := decodeJournalEnvelope(raw)
+			if err != nil || record.Seq != seq || record.Digest != digest || record.Previous != previous {
+				return blob.ErrIntegrity
+			}
+			records = append(records, json.RawMessage(raw))
+			previous = record.Digest
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		if head.seq != uint64(len(records)) || head.digest != previous || head.total != total {
+			return blob.ErrIntegrity
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	records := make([]json.RawMessage, 0, len(objects))
-	total := 0
-	previous := ""
-	for i, item := range objects {
-		if item.seq != uint64(i+1) || item.size < 1 || item.size > maxJournalRecordBytes+1 {
-			return nil, blob.ErrIntegrity
-		}
-		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		content, err := s.objects.Read(readCtx, item.key, maxJournalRecordBytes+1)
-		cancel()
-		if err != nil {
-			return nil, err
-		}
-		digest := sha256.Sum256(content)
-		total += len(content)
-		if len(content) != item.size || total > maxJournalBytes || hex.EncodeToString(digest[:]) != item.sha || len(content) == 0 || content[len(content)-1] != '\n' {
-			return nil, blob.ErrIntegrity
-		}
-		raw := content[:len(content)-1]
-		record, err := decodeJournalEnvelope(raw)
-		if err != nil || record.Seq != item.seq || record.Digest != item.digest || record.Previous != previous {
-			return nil, blob.ErrIntegrity
-		}
-		records = append(records, json.RawMessage(append([]byte{}, raw...)))
-		previous = record.Digest
-	}
-	if head.seq != uint64(len(records)) || head.digest != previous || head.total != total {
-		return nil, blob.ErrIntegrity
 	}
 	err = s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
@@ -378,40 +319,7 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 	if lease <= 0 {
 		return out, domain.ErrInvalid
 	}
-	if s.objects == nil {
-		return out, blob.ErrUnavailable
-	}
-	var prompt domain.RunPrompt
-	var snapshot []byte
-	var key, sha string
-	var size int
-	// Read and verify a consumed question outside the claim transaction.
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
-		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, false); err != nil {
-			return err
-		}
-		err := tx.QueryRowContext(ctx, `SELECT p.id,p.snapshot_key,p.snapshot_sha256,p.snapshot_size FROM run_prompts p WHERE p.run_id=? AND p.status IN ('resuming','failed') AND p.answer<>'' ORDER BY p.created_at DESC,p.id DESC LIMIT 1`, rid).Scan(&prompt.ID, &key, &sha, &size)
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil
-		}
-		return err
-	})
-	if err != nil {
-		return out, err
-	}
-	if prompt.ID != "" {
-		readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		snapshot, err = s.objects.Read(readCtx, key, domain.MaxRunSnapshotBytes)
-		cancel()
-		if err != nil {
-			return out, err
-		}
-		digest := sha256.Sum256(snapshot)
-		if len(snapshot) != size || hex.EncodeToString(digest[:]) != sha {
-			return out, blob.ErrIntegrity
-		}
-	}
-	err = s.transaction(ctx, func(tx *sql.Tx) error {
 		var err error
 		out.Role, err = lockWorkspace(ctx, tx, uid, wid)
 		if err != nil {
@@ -425,6 +333,9 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 		}
 		var status, code string
 		if err = tx.QueryRowContext(ctx, `SELECT status,error_code FROM runs WHERE id=? AND session_id=? FOR UPDATE`, rid, sid).Scan(&status, &code); err != nil {
+			return err
+		}
+		if err = assertRunExecutionTx(ctx, tx, rid); err != nil {
 			return err
 		}
 		if status != "failed" || (code != "lease_expired" && code != "agent_failed" && code != "interrupted") {
@@ -471,6 +382,10 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 		if err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&out.Query); err != nil {
 			return err
 		}
+		var prompt domain.RunPrompt
+		if err = tx.QueryRowContext(ctx, `SELECT id FROM run_prompts WHERE run_id=? AND status IN ('resuming','failed') AND answer<>'' ORDER BY created_at DESC,id DESC LIMIT 1`, rid).Scan(&prompt.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		if prompt.ID != "" {
 			prompt, err = scanPrompt(tx.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM run_prompts p JOIN runs r ON r.id=p.run_id WHERE p.id=? AND p.run_id=? FOR UPDATE`, prompt.ID, rid))
 			if err != nil {
@@ -479,13 +394,9 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 			if (prompt.Status != "failed" && prompt.Status != "resuming") || prompt.Answer == "" || !prompt.ExpiresAt.After(time.Now()) {
 				return domain.ErrConflict
 			}
-			var currentKey, currentSHA string
-			var currentSize int
-			if err = tx.QueryRowContext(ctx, `SELECT snapshot_key,snapshot_sha256,snapshot_size FROM run_prompts WHERE id=?`, prompt.ID).Scan(&currentKey, &currentSHA, &currentSize); err != nil {
+			snapshot, err := readRunSnapshotTx(ctx, tx, prompt.ID, rid)
+			if err != nil {
 				return err
-			}
-			if currentKey != key || currentSHA != sha || currentSize != size {
-				return domain.ErrConflict
 			}
 			out.Prompt, err = nativeAnsweredPrompt(prompt, uid, wid, sid, rid, snapshot, prompt.Answer)
 			if err != nil {

@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"magworkspace/internal/agent"
-	"magworkspace/internal/blob"
 	"magworkspace/internal/domain"
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
@@ -250,23 +249,30 @@ func TestHTTPPromptsPrivateOwnerAndRevocationOnResume(t *testing.T) {
 	}
 }
 
-func TestHTTPPromptsSnapshotIOFailuresDoNotPublishOrConsumeAnswer(t *testing.T) {
-	t.Run("upload failure", func(t *testing.T) {
+func TestHTTPPromptsSnapshotDatabaseFailuresDoNotPublishOrConsumeAnswer(t *testing.T) {
+	t.Run("transaction rollback", func(t *testing.T) {
 		x := newIndexFixture(t)
 		owner := x.register(t, "promptuploadfail")
 		session := x.session(t, owner, owner.Workspaces[0].ID, "存储失败")
 		x.agent.set(func(_ context.Context, req agent.Request) (agent.Result, error) {
 			return promptTestResult(req, "66666666666666666666666666666666"), nil
 		})
-		x.objects.putHook(func(context.Context, string) error { return blob.ErrUnavailable })
-		x.request(t, "POST", sessionPath(session)+"/messages", owner.Token, map[string]string{"content": "等待"}, 503)
+		db, err := sql.Open("mysql", x.dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		if _, err = db.Exec(`CREATE TRIGGER reject_snapshot BEFORE INSERT ON run_prompts FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='forced failure'`); err != nil {
+			t.Fatal(err)
+		}
+		x.request(t, "POST", sessionPath(session)+"/messages", owner.Token, map[string]string{"content": "等待"}, 500)
 		calls := x.agent.calls()
 		if len(calls) != 1 {
 			t.Fatalf("unexpected agent calls: %d", len(calls))
 		}
 		run := integrationData[domain.Run](t, x.request(t, "GET", sessionPath(session)+"/runs/"+calls[0].RunID, owner.Token, nil, 200))
 		if run.Status != "failed" {
-			t.Fatalf("failed snapshot upload exposed a resumable run: %+v", run)
+			t.Fatalf("failed snapshot transaction exposed a resumable run: %+v", run)
 		}
 		x.request(t, "GET", sessionPath(session)+"/runs/"+run.ID+"/prompt", owner.Token, nil, 404)
 	})
@@ -279,14 +285,14 @@ func TestHTTPPromptsSnapshotIOFailuresDoNotPublishOrConsumeAnswer(t *testing.T) 
 		})
 		pending := promptSuspendHTTP(t, x, owner, session)
 		path := promptPath(session, pending.Run.ID, pending.Prompt.ID)
-		x.objects.readHook(func(context.Context, string) error { return blob.ErrUnavailable })
-		x.request(t, "POST", path+"/answer", owner.Token, map[string]string{"answer": "国内"}, 503)
-		x.objects.readHook(nil)
-		x.objects.mu.Lock()
-		for key := range x.objects.data {
-			x.objects.data[key] = []byte(`{"opaque":"tampered"}`)
+		db, err := sql.Open("mysql", x.dsn)
+		if err != nil {
+			t.Fatal(err)
 		}
-		x.objects.mu.Unlock()
+		defer db.Close()
+		if _, err = db.Exec(`UPDATE run_prompts SET snapshot_sha256=REPEAT('0',64) WHERE id=?`, pending.Prompt.ID); err != nil {
+			t.Fatal(err)
+		}
 		x.request(t, "POST", path+"/answer", owner.Token, map[string]string{"answer": "国内"}, 503)
 		got := integrationData[domain.RunPrompt](t, x.request(t, "GET", path, owner.Token, nil, 200))
 		if got.Status != "pending" || got.Answer != "" || len(x.agent.calls()) != 1 {

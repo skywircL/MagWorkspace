@@ -41,13 +41,15 @@ python3 scripts/dev-webui.py --backend http://127.0.0.1:8080 --port 5173
 
 | 服务 | 唯一职责 |
 |---|---|
-| MySQL | 用户、Workspace/权限、私有会话与提问状态、个人长期记忆与墓碑、文档及版本元数据、父子分块正文及关系、索引任务状态与发布记录、来源关系及待清理对象记录 |
-| MinIO | 原始文件、私有执行快照与运行日志 |
+| MySQL | 用户、Workspace/权限、私有会话消息、Run状态与执行日志正文、提问/审批及暂停快照、个人长期记忆与墓碑、文档及版本元数据、父子分块正文及关系、索引任务状态与发布记录、来源关系及待清理对象记录 |
+| MinIO | 上传及生成的原始文件；未来解析图片等文件类资源也归文件存储，不保存Agent业务状态或日志正文 |
 | Redis | Asynq 索引执行与去重、短期处理进度和 SSE 补发；可靠投递与重试预算由 MySQL outbox 持有 |
 | Qdrant | 子块的内置多语言 BM25、向量索引与 RRF，可由原文重建 |
 | Ollama + bge-m3 | 为子块和查询本地生成 1024 维向量 |
 | TEI + mMARCO MiniLM | 对已召回且重新鉴权的子块进行相关性评分；不扫描全库，不写索引 |
 | Tika | 在受限容器中解析 PDF / DOCX；TXT / Markdown 在 Go 内处理 |
+
+Run journal 中的工具事实和 `context_committed` 上下文摘要保存在 MySQL，暂停快照与提问状态同事务提交；这些能力不因未配置 MinIO 而关闭。文件上传、下载及批准后创建原文件仍需要 MinIO。这里保留 Harness 的有界 JSONL 日志与摘要链契约，不将其等同于 WeKnora 清洗后的展示步骤，也不承诺无损重放外部副作用。当前职责及旧测试执行数据退役方式见[Agent状态存储决策](docs/decisions/027-agent-state-relational-storage.md)。
 
 上传成功即排队，查询版本 `/index` 观察 `queued/running/ready/failed`。检索支持 `lexical/vector/hybrid`，默认 hybrid；只返回当前版本的已发布索引，引用固定版本与分块。失败任务通过同一版本 POST `/index` 重试。详见 [API](docs/api.md#文档处理与检索)。
 

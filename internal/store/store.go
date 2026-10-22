@@ -22,7 +22,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql"}
+var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql", "migrations/016_agent_state_content.sql"}
 
 type Store struct {
 	pool           *sql.DB

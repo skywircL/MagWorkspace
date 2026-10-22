@@ -51,8 +51,6 @@ func TestMySQLRunJournalPersistsExactBytesAndFencesRecovery(t *testing.T) {
 	s, dsn := testStore(t)
 	ctx := context.Background()
 	u, w := testUser(t, s, "journalpersist")
-	objects := newMemoryObjects()
-	s.SetObjectStorage(objects)
 	ss, err := s.CreateSession(ctx, u.ID, w.ID, "Journal")
 	must(t, err)
 	r, _, _, err := s.BeginRun(ctx, u.ID, w.ID, ss.ID, "Original query", time.Minute, []string{})
@@ -67,7 +65,6 @@ func TestMySQLRunJournalPersistsExactBytesAndFencesRecovery(t *testing.T) {
 	reopened, err := Open(ctx, dsn)
 	must(t, err)
 	defer reopened.Close()
-	reopened.SetObjectStorage(objects)
 	var winners atomic.Int32
 	var recovered domain.RecoveredRun
 	var mu sync.Mutex
@@ -109,24 +106,23 @@ func TestMySQLRunJournalPersistsExactBytesAndFencesRecovery(t *testing.T) {
 	if len(records) != 1 || !bytes.Equal(records[0], record) {
 		t.Fatalf("canonical record changed: %s", records)
 	}
-	// A broken object is rejected independently of Python's hash-chain replay.
-	objects.mu.Lock()
-	for key := range objects.data {
-		if strings.Contains(key, "/journal/") {
-			objects.data[key] = []byte("corrupt\n")
-		}
-	}
-	objects.mu.Unlock()
+	// SQL bytes are checked independently of Python's hash-chain replay.
+	corrupt := append(append([]byte{}, record...), '\n')
+	corrupt[0] = '['
+	_, err = reopened.pool.ExecContext(ctx, `UPDATE run_journal_records SET content=? WHERE run_id=? AND seq=1`, corrupt, r.ID)
+	must(t, err)
 	if _, err = reopened.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, recovered.Generation, "load", nil); !errors.Is(err, blob.ErrIntegrity) {
 		t.Fatalf("corrupt record accepted: %v", err)
 	}
 }
 
-func TestMySQLRunJournalCASUploadFailureAndCleanup(t *testing.T) {
+func TestMySQLRunJournalAtomicAppendAndCascadeWithoutObjectStorage(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	u, w := testUser(t, s, "journalcleanup")
+	u, w := testUser(t, s, "journalatomic")
 	objects := newMemoryObjects()
+	objects.putHook = func(context.Context, string) error { return blob.ErrUnavailable }
+	objects.readHook = func(context.Context, string) error { return blob.ErrUnavailable }
 	s.SetObjectStorage(objects)
 	ss, err := s.CreateSession(ctx, u.ID, w.ID, "J")
 	must(t, err)
@@ -134,13 +130,9 @@ func TestMySQLRunJournalCASUploadFailureAndCleanup(t *testing.T) {
 	must(t, err)
 	gen, err := s.BeginRunJournal(ctx, u.ID, w.ID, ss.ID, r.ID)
 	must(t, err)
-	record := journalRecord(1, "", strings.Repeat("b", 64))
+	first := strings.Repeat("b", 64)
+	record := journalRecord(1, "", first)
 	args := append(append([]byte(`{"record":`), record...), '}')
-	objects.putHook = func(context.Context, string) error { return blob.ErrUnavailable }
-	if _, err = s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, gen, "append", args); !errors.Is(err, blob.ErrUnavailable) {
-		t.Fatalf("upload failure ignored: %v", err)
-	}
-	objects.putHook = nil
 	var successes atomic.Int32
 	var wg sync.WaitGroup
 	for range 3 {
@@ -159,19 +151,34 @@ func TestMySQLRunJournalCASUploadFailureAndCleanup(t *testing.T) {
 	if successes.Load() != 1 {
 		t.Fatalf("append CAS winners=%d", successes.Load())
 	}
-	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND)`)
+	// Fail the head write after the record INSERT: both must roll back.
+	_, err = s.pool.ExecContext(ctx, `CREATE TRIGGER reject_journal_head BEFORE UPDATE ON run_journal_heads FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='journal head update rejected'`)
 	must(t, err)
-	must(t, s.CleanupObjects(ctx))
-	if objects.count() != 1 {
-		t.Fatalf("live journal removed or orphan retained: %d", objects.count())
+	second := journalRecord(2, first, strings.Repeat("c", 64))
+	args = append(append([]byte(`{"record":`), second...), '}')
+	if _, err = s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, gen, "append", args); err == nil {
+		t.Fatal("failed head update was reported as successful")
+	}
+	_, err = s.pool.ExecContext(ctx, `DROP TRIGGER reject_journal_head`)
+	must(t, err)
+	loaded, err := s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, gen, "load", nil)
+	must(t, err)
+	if records := loaded.(map[string]any)["records"].([]json.RawMessage); len(records) != 1 || !bytes.Equal(records[0], record) {
+		t.Fatal("failed head update left a partial journal append")
+	}
+	appendJournal(t, s, ctx, u, w, ss, r, gen, second)
+	var cleanup int
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM object_cleanup`).Scan(&cleanup))
+	if cleanup != 0 || objects.count() != 0 {
+		t.Fatal("database journal created an object or cleanup reservation")
 	}
 	must(t, s.FailRun(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, "agent_failed"))
 	must(t, s.DeleteSession(ctx, u.ID, w.ID, ss.ID))
-	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND)`)
-	must(t, err)
-	must(t, s.CleanupObjects(ctx))
-	if objects.count() != 0 {
-		t.Fatal("journal object leaked after session deletion")
+	var heads, records int
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_journal_heads WHERE run_id=?`, r.ID).Scan(&heads))
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_journal_records WHERE run_id=?`, r.ID).Scan(&records))
+	if heads != 0 || records != 0 {
+		t.Fatal("session deletion retained private journal rows")
 	}
 }
 
@@ -179,7 +186,6 @@ func TestMySQLRunJournalRejectsRecoveryBoundaries(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
 	u, w := testUser(t, s, "journaldeny")
-	s.SetObjectStorage(newMemoryObjects())
 	create := func(journal bool) (domain.Session, domain.Run, uint64) {
 		ss, e := s.CreateSession(ctx, u.ID, w.ID, "J")
 		must(t, e)
@@ -227,7 +233,6 @@ func TestMySQLRunJournalAnsweredPromptRecoveryPreservesAnswer(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
 	u, w := testUser(t, s, "journalprompt")
-	s.SetObjectStorage(newMemoryObjects())
 	ss, err := s.CreateSession(ctx, u.ID, w.ID, "J")
 	must(t, err)
 	r, _, _, err := s.BeginRun(ctx, u.ID, w.ID, ss.ID, "Q", time.Minute)
@@ -264,12 +269,10 @@ func TestMySQLRunJournalAnsweredPromptRecoveryPreservesAnswer(t *testing.T) {
 	}
 }
 
-func TestMySQLRunJournalRechecksGenerationAfterObjectIO(t *testing.T) {
+func TestMySQLRunJournalRejectsStaleGenerationWithoutObjectStorage(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	u, w := testUser(t, s, "journalio")
-	objects := newMemoryObjects()
-	s.SetObjectStorage(objects)
+	u, w := testUser(t, s, "journalgeneration")
 	ss, err := s.CreateSession(ctx, u.ID, w.ID, "J")
 	must(t, err)
 	r, _, _, err := s.BeginRun(ctx, u.ID, w.ID, ss.ID, "Q", time.Minute)
@@ -278,35 +281,39 @@ func TestMySQLRunJournalRechecksGenerationAfterObjectIO(t *testing.T) {
 	must(t, err)
 	first := strings.Repeat("1", 64)
 	appendJournal(t, s, ctx, u, w, ss, r, gen, journalRecord(1, "", first))
-	var next uint64
-	objects.putHook = func(context.Context, string) error {
-		must(t, s.FailRun(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, "agent_failed"))
-		recovered, e := s.RecoverRun(ctx, u.ID, w.ID, ss.ID, r.ID, time.Minute)
-		must(t, e)
-		next = recovered.Generation
-		return nil
-	}
+	must(t, s.FailRun(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, "agent_failed"))
+	recovered, err := s.RecoverRun(ctx, u.ID, w.ID, ss.ID, r.ID, time.Minute)
+	must(t, err)
 	record := journalRecord(2, first, strings.Repeat("2", 64))
 	args := append(append([]byte(`{"record":`), record...), '}')
-	_, err = s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, gen, "append", args)
-	wantError(t, err, domain.ErrConflict)
-	objects.putHook = nil
-	loaded, err := s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, next, "load", nil)
+	for _, operation := range []string{"append", "load", "checkpoint_read", "checkpoint_write"} {
+		_, err = s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, gen, operation, args)
+		wantError(t, err, domain.ErrConflict)
+	}
+	loaded, err := s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, recovered.Generation, "load", nil)
 	must(t, err)
 	if len(loaded.(map[string]any)["records"].([]json.RawMessage)) != 1 {
-		t.Fatal("stale Put published after recovery claim")
+		t.Fatal("stale append changed the recovered journal")
 	}
-	var once atomic.Bool
-	objects.readHook = func(context.Context, string) error {
-		if once.CompareAndSwap(false, true) {
-			must(t, s.FailRun(WithRunExecution(ctx, r.ID, next), u.ID, w.ID, ss.ID, r.ID, "agent_failed"))
-			_, e := s.RecoverRun(ctx, u.ID, w.ID, ss.ID, r.ID, time.Minute)
-			must(t, e)
-		}
-		return nil
-	}
-	_, err = s.RunJournal(ctx, u.ID, w.ID, ss.ID, r.ID, next, "load", nil)
+	appendJournal(t, s, ctx, u, w, ss, r, recovered.Generation, record)
+	must(t, s.FailRun(WithRunExecution(ctx, r.ID, recovered.Generation), u.ID, w.ID, ss.ID, r.ID, "agent_failed"))
+	_, err = s.RecoverRun(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, time.Minute)
 	wantError(t, err, domain.ErrConflict)
+	next, err := s.RecoverRun(ctx, u.ID, w.ID, ss.ID, r.ID, time.Minute)
+	must(t, err)
+	if next.Generation != recovered.Generation+1 {
+		t.Fatal("stale recovery context claimed or changed execution generation")
+	}
+	in := promptInput(t)
+	_, err = s.SuspendRun(WithRunExecution(ctx, r.ID, next.Generation), u.ID, w.ID, ss.ID, r.ID, "demo", in)
+	must(t, err)
+	_, err = s.ResumePrompt(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, in.ID, "stale answer", time.Minute)
+	wantError(t, err, domain.ErrConflict)
+	resumed, err := s.ResumePrompt(ctx, u.ID, w.ID, ss.ID, r.ID, in.ID, "current answer", time.Minute)
+	must(t, err)
+	if resumed.Generation != next.Generation+1 {
+		t.Fatal("stale prompt context claimed or changed execution generation")
+	}
 }
 
 func TestMySQLRunJournalRecoveryReauthorizesAndRejectsDeletedSources(t *testing.T) {

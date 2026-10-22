@@ -13,12 +13,6 @@ import (
 // bindRunJournal gives the child an execution-scoped capability, never storage
 // paths or database credentials. Every callback rechecks the current generation.
 func (s *server) bindRunJournal(ctx context.Context, request *agent.Request) (context.Context, error) {
-	if !s.db.RunPersistenceEnabled() {
-		request.MemoryHandler = func(callbackCtx context.Context, operation string, arguments json.RawMessage) (any, error) {
-			return s.db.RunMemory(callbackCtx, request.UserID, request.WorkspaceID, request.SessionID, request.RunID, 0, operation, arguments)
-		}
-		return ctx, nil
-	}
 	generation := request.Generation
 	if generation == 0 {
 		var err error
@@ -54,7 +48,7 @@ func (s *server) recoverRun(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if s.agent == nil || !s.db.RunPersistenceEnabled() {
+	if s.agent == nil {
 		problem(w, 503, "recovery_unavailable", "persistent agent recovery is unavailable")
 		return
 	}

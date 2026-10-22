@@ -2,6 +2,9 @@ package httpapi_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -199,14 +202,24 @@ func TestHTTPWorkspaceRealHarnessToolsSuspendRestartResumeCitation(t *testing.T)
 	if pending.Run.Status != "suspended" || pending.Prompt.Status != "pending" || pending.Prompt.RunID != pending.Run.ID {
 		t.Fatalf("real Harness question not durably suspended: %+v", pending)
 	}
-	var snapshot []byte
-	x.objects.mu.Lock()
-	for key, data := range x.objects.data {
-		if strings.Contains(key, "/prompts/"+pending.Prompt.ID+"/") {
-			snapshot = append([]byte(nil), data...)
-		}
+	db, err := sql.Open("mysql", x.dsn)
+	if err != nil {
+		t.Fatal(err)
 	}
-	x.objects.mu.Unlock()
+	defer db.Close()
+	var snapshot []byte
+	var snapshotSHA string
+	var snapshotSize int
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 5*time.Second)
+	err = db.QueryRowContext(readCtx, `SELECT snapshot,snapshot_sha256,snapshot_size FROM run_prompts WHERE id=? AND run_id=?`, pending.Prompt.ID, pending.Run.ID).Scan(&snapshot, &snapshotSHA, &snapshotSize)
+	cancelRead()
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(snapshot)
+	if len(snapshot) != snapshotSize || hex.EncodeToString(digest[:]) != snapshotSHA {
+		t.Fatal("actual Harness snapshot SQL bytes differ from persisted integrity metadata")
+	}
 	var native struct {
 		RunID string `json:"run_id"`
 		Steps []struct {
@@ -219,7 +232,7 @@ func TestHTTPWorkspaceRealHarnessToolsSuspendRestartResumeCitation(t *testing.T)
 		} `json:"steps"`
 	}
 	if json.Unmarshal(snapshot, &native) != nil || native.RunID != pending.Run.ID {
-		t.Fatal("actual Harness snapshot not saved in object storage")
+		t.Fatal("actual Harness snapshot not saved in MySQL")
 	}
 	snapshotted := map[string]bool{}
 	for _, step := range native.Steps {

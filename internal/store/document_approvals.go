@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"magworkspace/internal/blob"
 	"magworkspace/internal/domain"
 )
 
-// Approval arguments live only in the immutable private snapshot, not MySQL.
+// Approval arguments live in the private MySQL snapshot, outside public metadata.
 func approvalArguments(snapshot, callID, tool string) (json.RawMessage, error) {
 	var v struct {
 		Pending struct {
@@ -182,38 +181,22 @@ func (s *Store) hydrateApproval(ctx context.Context, uid, wid, sid, rid string, 
 	if p.Approval == nil || (p.Status != "pending" && p.Status != "resuming") {
 		return nil
 	}
-	if s.objects == nil {
-		return blob.ErrUnavailable
-	}
-	var key, sha string
-	var size int
+	var req map[string]any
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, false); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT snapshot_key,snapshot_sha256,snapshot_size FROM run_prompts WHERE id=? AND run_id=?`, p.ID, rid).Scan(&key, &sha, &size)
+		raw, err := readRunSnapshotTx(ctx, tx, p.ID, rid)
+		if err != nil {
+			return err
+		}
+		req, err = nativeApprovalRequest(*p, raw)
+		return err
 	})
 	if err != nil {
 		return err
 	}
-	readCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	raw, err := s.objects.Read(readCtx, key, domain.MaxRunSnapshotBytes)
-	if err != nil {
-		return err
-	}
-	hash := sha256.Sum256(raw)
-	if len(raw) != size || hex.EncodeToString(hash[:]) != sha {
-		return blob.ErrIntegrity
-	}
-	req, err := nativeApprovalRequest(*p, raw)
-	if err != nil {
-		return err
-	}
-	err = s.transaction(ctx, func(tx *sql.Tx) error { return authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, false) })
-	if err != nil {
-		return err
-	}
+
 	p.Approval.Arguments = req["arguments"].(json.RawMessage)
 	return nil
 }

@@ -54,7 +54,7 @@ func TestMySQLDocumentApprovalAtomicReceiptVersionsAndRestart(t *testing.T) {
 	s, err = Open(ctx, dsn, profile)
 	must(t, err)
 	defer s.Close()
-	s.SetObjectStorage(objects)
+	// Reading and claiming a persisted approval needs only MySQL after restart.
 	p, err := s.RunPrompt(ctx, u.ID, w.ID, ss.ID, run.ID, in.ID)
 	must(t, err)
 	if p.Kind != "tool_approval" || p.Approval == nil || !strings.Contains(string(p.Approval.Arguments), "不可覆盖") {
@@ -63,7 +63,7 @@ func TestMySQLDocumentApprovalAtomicReceiptVersionsAndRestart(t *testing.T) {
 	var metadata []byte
 	must(t, s.pool.QueryRow(`SELECT metadata FROM run_document_approvals WHERE prompt_id=?`, in.ID).Scan(&metadata))
 	if strings.Contains(string(metadata), "不可覆盖") || strings.Contains(string(metadata), `"arguments":`) {
-		t.Fatal("body stored in MySQL")
+		t.Fatal("proposal body leaked into public approval metadata")
 	}
 	var claims atomic.Int32
 	var resume domain.ResumedRun
@@ -88,6 +88,9 @@ func TestMySQLDocumentApprovalAtomicReceiptVersionsAndRestart(t *testing.T) {
 	if claims.Load() != 1 {
 		t.Fatalf("approval claims=%d", claims.Load())
 	}
+	_, err = s.ExecuteDocumentWrite(WithRunExecution(ctx, run.ID, resume.Generation), u.ID, w.ID, ss.ID, run.ID, in.ToolCallID, in.Approval.Tool, in.Approval.Arguments)
+	wantError(t, err, blob.ErrUnavailable)
+	s.SetObjectStorage(objects)
 	_, err = s.ExecuteDocumentWrite(oldctx, u.ID, w.ID, ss.ID, run.ID, in.ToolCallID, in.Approval.Tool, in.Approval.Arguments)
 	if !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("old generation: %v", err)

@@ -13,7 +13,8 @@ import (
 )
 
 // SetObjectStorage is startup configuration, before serving requests or workers.
-// A nil store is supported only for existing inline fixtures and migrations.
+// A nil store supports inline file fixtures and migrations; Agent database
+// persistence does not depend on object storage.
 func (s *Store) SetObjectStorage(objects blob.Storage) { s.objects = objects }
 
 // stageDocumentObject commits an authorized cleanup record before any external
@@ -253,26 +254,6 @@ func (s *Store) cleanupObject(ctx context.Context, id string) error {
 		}
 		if referenced {
 			_, err := tx.ExecContext(ctx, `DELETE FROM object_cleanup WHERE id=?`, id)
-			return err
-		}
-		// Journal reservations stay durable for the full Run lifetime, including
-		// completed Runs. Their FK cascade removes the reference on deletion.
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM run_journal_records WHERE object_key=?)`, key).Scan(&referenced); err != nil {
-			return err
-		}
-		if referenced {
-			_, err := tx.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_ADD(UTC_TIMESTAMP(6),INTERVAL 1 DAY) WHERE id=?`, id)
-			return err
-		}
-		// Suspended snapshots retain a cleanup record even while referenced. A
-		// lost commit acknowledgement must neither delete a live prompt nor leak
-		// its snapshot permanently. The row also survives session deletion.
-		var promptExpiry sql.NullTime
-		if err := tx.QueryRowContext(ctx, `SELECT MAX(expires_at) FROM run_prompts WHERE snapshot_key=? AND expires_at>UTC_TIMESTAMP(6)`, key).Scan(&promptExpiry); err != nil {
-			return err
-		}
-		if promptExpiry.Valid {
-			_, err := tx.ExecContext(ctx, `UPDATE object_cleanup SET available_at=? WHERE id=?`, promptExpiry.Time.Add(time.Hour), id)
 			return err
 		}
 		var err error

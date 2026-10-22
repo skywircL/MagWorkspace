@@ -132,6 +132,36 @@ func recoverySQL(t *testing.T, x *indexFixture, query string, args ...any) {
 	}
 }
 
+// Read actual SQL bytes without claiming a new execution or exposing them over
+// the public API; completed and failed runs deliberately reject journal callbacks.
+func storedJournalFacts(t *testing.T, x *indexFixture, runID string) [][]byte {
+	t.Helper()
+	db, err := sql.Open("mysql", x.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `SELECT content FROM run_journal_records WHERE run_id=? ORDER BY seq`, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var records [][]byte
+	for rows.Next() {
+		var content []byte
+		if err = rows.Scan(&content); err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, content)
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return records
+}
+
 func recoveryRestart(t *testing.T, x *indexFixture) {
 	t.Helper()
 	x.server.Close()
@@ -153,10 +183,12 @@ func recoveryRestart(t *testing.T, x *indexFixture) {
 
 func TestHTTPRecoveryDurableSameRunAfterRestartFencesOldExecution(t *testing.T) {
 	x := newIndexFixture(t)
+	x.store.SetObjectStorage(nil)
 	owner := x.register(t, "recoveryrestart")
 	session := x.session(t, owner, owner.Workspaces[0].ID, "持久化恢复")
 	failed, original := recoveryFailedHTTP(t, x, owner, session, []string{})
 	recoveryRestart(t, x)
+	x.store.SetObjectStorage(nil)
 	x.agent.set(func(ctx context.Context, req agent.Request) (agent.Result, error) {
 		if !req.Recover || req.Resume != nil || req.RunID != failed.ID || req.UserID != owner.User.ID || req.WorkspaceID != session.WorkspaceID || req.SessionID != session.ID || req.Role != "owner" || req.Query != original.Query || req.DocumentIDs == nil || len(*req.DocumentIDs) != 0 || req.Generation <= original.Generation {
 			return agent.Result{}, errors.New("recovery changed authenticated identity, original query, scope or generation")

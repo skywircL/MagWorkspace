@@ -122,14 +122,12 @@ sys.exit(bridge.main())
 				t.Fatal("context interruption altered or duplicated ordinary turns")
 			}
 			runID := messages[48].RunID
-			x.objects.mu.Lock()
 			committed := false
-			for key, raw := range x.objects.data {
-				if strings.HasPrefix(key, "runs/"+runID+"/journal/") && strings.Contains(string(raw), `"kind":"context_committed"`) && strings.Contains(string(raw), checkpoint) {
+			for _, raw := range storedJournalFacts(t, x, runID) {
+				if strings.Contains(string(raw), `"kind":"context_committed"`) && strings.Contains(string(raw), checkpoint) {
 					committed = true
 				}
 			}
-			x.objects.mu.Unlock()
 			if !committed {
 				t.Fatal("the private fitted checkpoint was not persisted before the crash")
 			}
