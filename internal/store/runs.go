@@ -17,10 +17,33 @@ func expireSessionRuns(ctx context.Context, tx *sql.Tx, sessionID string) error 
 }
 
 func (s *Store) BeginRun(ctx context.Context, userID, workspaceID, sessionID, query string, lease time.Duration, documentIDs ...[]string) (domain.Run, []domain.Message, string, error) {
+	if len(documentIDs) > 1 {
+		return domain.Run{}, nil, "", domain.ErrInvalid
+	}
+	var scope domain.RetrievalScope
+	if len(documentIDs) == 1 {
+		scope.DocumentIDs = documentIDs[0]
+	}
+	return s.BeginRunWithScope(ctx, userID, workspaceID, sessionID, query, lease, scope)
+}
+
+// BeginRunWithScope fixes the authorized resource selection with the new Run and
+// user message in one transaction. Later tool calls can only narrow it.
+func (s *Store) BeginRunWithScope(ctx context.Context, userID, workspaceID, sessionID, query string, lease time.Duration, scope domain.RetrievalScope) (domain.Run, []domain.Message, string, error) {
+	return s.beginRun(ctx, userID, workspaceID, sessionID, query, lease, scope, nil)
+}
+
+// BeginRunWithResources fixes full-library and document union targets with the
+// user message, so retries, approval and recovery cannot rebuild a wider scope.
+func (s *Store) BeginRunWithResources(ctx context.Context, uid, wid, sid, query string, lease time.Duration, selection domain.ResourceSelection) (domain.Run, []domain.Message, string, error) {
+	return s.beginRun(ctx, uid, wid, sid, query, lease, domain.RetrievalScope{}, &selection)
+}
+
+func (s *Store) beginRun(ctx context.Context, userID, workspaceID, sessionID, query string, lease time.Duration, scope domain.RetrievalScope, resources *domain.ResourceSelection) (domain.Run, []domain.Message, string, error) {
 	var run domain.Run
 	history := []domain.Message{}
 	var role string
-	if !validText(query, 64000) || lease <= 0 || len(documentIDs) > 1 || (len(documentIDs) == 1 && len(documentIDs[0]) > 100) {
+	if !validText(query, 64000) || lease <= 0 || len(scope.DocumentIDs) > 100 || domain.ValidateKnowledgeBaseIDs(scope.KnowledgeBaseIDs) != nil {
 		return run, history, role, domain.ErrInvalid
 	}
 	runID, err := newID()
@@ -69,13 +92,29 @@ func (s *Store) BeginRun(ctx context.Context, userID, workspaceID, sessionID, qu
 		if err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,session_id,status,lease_expires_at) VALUES(?,?,'running',DATE_ADD(UTC_TIMESTAMP(6),INTERVAL ? MICROSECOND))`, runID, sessionID, lease.Microseconds())
+		scopeVersion := 1
+		if resources != nil {
+			scopeVersion = 2
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO runs(id,session_id,status,lease_expires_at,resource_scope_version) VALUES(?,?,'running',DATE_ADD(UTC_TIMESTAMP(6),INTERVAL ? MICROSECOND),?)`, runID, sessionID, lease.Microseconds(), scopeVersion)
 		if err != nil {
 			return err
 		}
-		if len(documentIDs) == 1 {
-			if err = storeRunDocumentScopeTx(ctx, tx, workspaceID, runID, documentIDs[0]); err != nil {
+		if resources != nil {
+			if err = storeRunResourceScopeTx(ctx, tx, workspaceID, runID, *resources); err != nil {
 				return err
+			}
+		} else {
+			if err = storeRunDocumentScopeTx(ctx, tx, workspaceID, runID, scope.DocumentIDs); err != nil {
+				return err
+			}
+			if err = storeRunKnowledgeBaseScopeTx(ctx, tx, workspaceID, runID, scope.KnowledgeBaseIDs); err != nil {
+				return err
+			}
+			for _, id := range scope.DocumentIDs {
+				if err = checkRunDocumentKnowledgeBaseTx(ctx, tx, workspaceID, runID, id); err != nil {
+					return err
+				}
 			}
 		}
 		run, err = scanRun(tx.QueryRowContext(ctx, `SELECT id,session_id,status,error_code,mode,created_at,finished_at FROM runs WHERE id=? AND session_id=?`, runID, sessionID))
@@ -156,7 +195,7 @@ func (s *Store) FinishRun(ctx context.Context, userID, workspaceID, sessionID, r
 		if _, err := tx.ExecContext(ctx, `INSERT INTO messages(id,session_id,run_id,role,content) VALUES(?,?,?,'assistant',?)`, id, sessionID, runID, answer); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE memory_capture_jobs SET status='queued',error_code='',updated_at=UTC_TIMESTAMP(6) WHERE run_id=? AND (status='waiting' OR (status='cancelled' AND error_code='run_failed'))`, runID); err != nil {
+		if err := queueMemoryCaptureTx(ctx, tx, runID); err != nil {
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE sessions SET updated_at=UTC_TIMESTAMP(6) WHERE id=? AND workspace_id=? AND user_id=?`, sessionID, workspaceID, userID)
@@ -192,6 +231,9 @@ func (s *Store) FailRun(ctx context.Context, userID, workspaceID, sessionID, run
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE memory_capture_jobs SET status='cancelled',error_code='run_failed',updated_at=UTC_TIMESTAMP(6) WHERE run_id=? AND status='waiting'`, runID); err != nil {
+			return err
+		}
+		if err := deleteMemoryCaptureDeliveryTx(ctx, tx, runID); err != nil {
 			return err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE runs SET status='failed',error_code=?,finished_at=UTC_TIMESTAMP(6) WHERE id=?`, code, runID)

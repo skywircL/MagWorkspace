@@ -6,6 +6,8 @@ const state = {
   userID: "",
   spaces: [],
   wid: "",
+  knowledgeBases: [],
+  kid: "",
   sid: "",
   rid: "",
   docPage: 1,
@@ -19,11 +21,20 @@ const state = {
   runStatus: "",
 };
 let authEpoch = 0;
+let searchRevision = 0;
+let documentsRevision = 0;
+// Draft preferences only. The backend owns the immutable scope of an accepted Run.
+const chatScopes = new Map();
+let chatScopeDraft = null;
+let chatMention = null;
+let queryComposing = false;
+const chatDocuments = new Map();
 const authChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("magworkspace-auth") : null;
 let refreshing = null,
   noticeTimer;
 const enc = encodeURIComponent;
 const wp = () => "/api/v1/workspaces/" + enc(state.wid);
+const kp = () => wp() + "/knowledge-bases/" + enc(state.kid);
 const sp = () => wp() + "/sessions/" + enc(state.sid);
 const rp = () => sp() + "/runs/" + enc(state.rid);
 function node(tag, text, cls) {
@@ -215,30 +226,40 @@ function pager(id, result, onPage) {
 }
 function syncAvailability() {
   const hasSpace = Boolean(state.wid);
+  const hasKnowledgeBase = hasSpace && Boolean(state.kid);
+  $("knowledge-base").disabled = !hasSpace || !state.knowledgeBases.length;
+  $("new-knowledge-base").hidden = !manageKnowledgeBases();
+  $("new-knowledge-base").disabled = !hasSpace;
+  for (const id of ["edit-knowledge-base", "delete-knowledge-base"]) {
+    $(id).hidden = !manageKnowledgeBases();
+    $(id).disabled = !hasKnowledgeBase;
+  }
   for (const id of ["memory-refresh", "memory-export", "memory-clear", "memory-status"])
     $(id).disabled = !hasSpace;
   $("memory-toggle").disabled = !hasSpace || state.memoryEnabled === null;
-  $("show-upload").disabled = !hasSpace || !writable();
+  $("show-upload").disabled = !hasKnowledgeBase || !writable();
   $("upload-form").querySelectorAll("input,button").forEach((e) => {
-    e.disabled = !hasSpace || !writable();
+    e.disabled = !hasKnowledgeBase || !writable();
   });
   $("new-session").disabled = !hasSpace;
   $("refresh-docs").disabled = !hasSpace;
   $("search-form").querySelectorAll("input,select,button").forEach((e) => {
-    e.disabled = !hasSpace;
+    e.disabled = !hasKnowledgeBase;
   });
   const hasSession = hasSpace && Boolean(state.sid);
   $("rename-session").disabled = !hasSession;
   $("delete-session").disabled = !hasSession;
   $("refresh-chat").disabled = !hasSession;
-  $("send").disabled = !hasSession || ["running", "suspended"].includes(state.runStatus);
+  $("send").disabled = !hasSession || ["running", "suspended"].includes(state.runStatus) || missingChatResources().length > 0;
   $("query").disabled = !hasSession;
   $("composer-hint").textContent = state.runStatus === "suspended"
     ? "请先答复或处理上方审批，再继续提问"
     : state.runStatus === "running" ? "Agent 正在处理，完成后可继续提问" : "Ctrl / ⌘ + Enter 发送 · Enter 换行";
   $("query").placeholder = hasSession
-    ? "查找资料、核对条款，或请 Agent 更新文档…"
+    ? "输入 @ 选择知识库或文档，再提出你的问题…"
     : "先新建或选择一个会话，开始与知识对话";
+  renderChatScope();
+  if ($("chat-scope-dialog").open) renderChatScopeSummary();
 }
 function showView(view) {
   $("shell").classList.toggle("chat-mode", view === "chat");
@@ -250,7 +271,7 @@ function showView(view) {
   $("page-title").textContent = { docs: "文档知识库", chat: "Agent 会话", memory: "个人记忆" }[view];
   $("page-description").textContent = {
     docs: "让资料井然有序，让每个答案有据可循。",
-    chat: "检索知识、追溯来源，与 Agent 一起完成工作。",
+    chat: "输入 @ 选择知识库或文档，查找资料、整理思路，或继续深入追问。",
     memory: "管理你的资料、偏好与长期事项，让后续对话更贴合你。",
   }[view];
   history.replaceState(null, "", "#" + view);
@@ -295,12 +316,16 @@ function writable() {
     state.spaces.find((x) => x.id === state.wid)?.role,
   );
 }
+function manageKnowledgeBases() {
+  return ["owner", "admin"].includes(state.spaces.find((w) => w.id === state.wid)?.role);
+}
 function roleLabel() {
   return { owner: "所有者", admin: "管理员", contributor: "协作者", viewer: "只读成员" }[
     state.spaces.find((w) => w.id === state.wid)?.role
   ] || "暂无空间";
 }
 function clearSearch() {
+  searchRevision++;
   $("search-results").replaceChildren();
   $("search-summary").textContent = "";
   $("clear-search").hidden = true;
@@ -313,17 +338,28 @@ function clearSearch() {
 }
 function resetAuth() {
   authEpoch++;
+  searchRevision++;
+  documentsRevision++;
   state.controller?.abort();
   state.auth = null;
   state.userID = "";
   try { sessionStorage.removeItem("magworkspace.navigation"); } catch {}
   $("auth-restoring").hidden = true;
   state.spaces = [];
+  state.knowledgeBases = [];
+  chatScopes.clear();
+  chatDocuments.clear();
+  closeMentionPicker();
+  chatScopeDraft = null;
+  $("chat-scope-dialog").close();
+  $("chat-scope-options").replaceChildren();
+  $("chat-scope-chips").replaceChildren();
+  state.kid = "";
   state.memoryEnabled = null;
   state.wid = state.sid = state.rid = state.runStatus = "";
   $("shell").hidden = true;
   $("auth").hidden = false;
-  for (const id of ["messages", "prompt", "run-state", "draft", "documents", "sessions", "search-results", "detail-body", "identity", "workspace", "memory-list"])
+  for (const id of ["messages", "prompt", "run-state", "draft", "documents", "sessions", "search-results", "detail-body", "identity", "workspace", "memory-list", "knowledge-base", "knowledge-base-description", "upload-knowledge-base"])
     $(id).replaceChildren();
   $("query").value = "";
   $("search-form").reset();
@@ -357,7 +393,15 @@ async function loadSpaces() {
   $("role").textContent = roleLabel();
   $("workspace-name").textContent = state.spaces.find((w) => w.id === state.wid)?.name || "工作空间";
 }
-async function switchSpace() {
+async function switchSpace(preferredKnowledgeBase = "") {
+  chatScopes.clear();
+  chatDocuments.clear();
+  closeMentionPicker();
+  $("chat-scope-dialog").close();
+  state.knowledgeBases = [];
+  state.kid = "";
+  renderKnowledgeBases();
+  resetDocumentView();
   state.memoryEnabled = null;
   $("memory-list").replaceChildren();
   $("memory-count").textContent = "0";
@@ -380,6 +424,7 @@ async function switchSpace() {
   $("session-title").textContent = "选择或创建会话";
   clearSearch();
   if (state.wid) {
+    await loadKnowledgeBases(preferredKnowledgeBase);
     await loadDocs();
     await loadSessions();
     if (!$("memory-view").hidden) await loadMemories();
@@ -394,7 +439,8 @@ function rememberNavigation() {
   if (!state.auth || !state.userID) return;
   try {
     sessionStorage.setItem("magworkspace.navigation", JSON.stringify({
-      userID: state.userID, wid: state.wid, sid: state.sid,
+      userID: state.userID, wid: state.wid, kid: state.kid, sid: state.sid,
+      chatScopes: Object.fromEntries(chatScopes),
       view: !$("memory-view").hidden ? "memory" : $("chat-view").hidden ? "docs" : "chat",
     }));
   } catch { /* Browser storage restrictions do not prevent using the workspace. */ }
@@ -419,11 +465,19 @@ async function enterWorkspace() {
   $("shell").hidden = false;
   const view = saved?.view || location.hash.slice(1);
   showView(["chat", "memory"].includes(view) ? view : "docs");
-  await switchSpace();
+  await switchSpace(typeof saved?.kid === "string" ? saved.kid : "");
+  if (saved?.wid === state.wid && saved.chatScopes && typeof saved.chatScopes === "object" && !Array.isArray(saved.chatScopes)) {
+    for (const [sid, scope] of Object.entries(saved.chatScopes)) {
+      if (!sid || sid.length >= 100) continue;
+      // Invalid or obsolete draft metadata must not widen the resource range.
+      chatScopes.set(sid, savedChatScope(scope));
+    }
+  }
   if (saved?.sid && saved.wid === state.wid) {
     try {
       const session = await api(wp() + "/sessions/" + enc(saved.sid));
       state.sid = session.id;
+      await refreshChatDocuments();
       $("session-title").textContent = session.title;
       await loadMessages(true);
       await loadSessions();
@@ -499,6 +553,7 @@ bind("new-workspace", () =>
 );
 bind("nav-docs", async () => {
   showView("docs");
+  await loadKnowledgeBases();
   await loadDocs();
 });
 bind("nav-chat", async () => {
@@ -588,9 +643,404 @@ function memoryEditor(item) {
   body.append(formNode);
 }
 bind("close-detail", () => $("detail").close());
+function renderKnowledgeBases() {
+  const select = $("knowledge-base");
+  select.replaceChildren();
+  if (!state.knowledgeBases.length) {
+    const option = node("option", "暂无知识库");
+    option.value = "";
+    select.append(option);
+  }
+  for (const knowledgeBase of state.knowledgeBases) {
+    const option = node("option", knowledgeBase.name + (knowledgeBase.is_default ? " · 默认" : ""));
+    option.value = knowledgeBase.id;
+    select.append(option);
+  }
+  select.value = state.kid;
+  const current = state.knowledgeBases.find((item) => item.id === state.kid);
+  $("knowledge-base-description").textContent = current?.description || (current
+    ? "此页的文档、上传和检索仅限当前知识库。"
+    : manageKnowledgeBases() ? "创建一个知识库，开始分类整理资料。" : "当前空间暂无知识库，请联系管理员创建。");
+  $("upload-knowledge-base").textContent = current ? "上传至：" + current.name : "请先选择知识库";
+  renderChatScope();
+}
+function emptyChatScope() {
+  return { knowledge_base_ids: [], document_ids: [] };
+}
+function copyChatScope(scope) {
+  return scope === null ? null : { knowledge_base_ids: [...scope.knowledge_base_ids], document_ids: [...scope.document_ids] };
+}
+function savedChatScope(value) {
+  if (value === null) return null;
+  const validIDs = (ids, limit) => Array.isArray(ids) && ids.length <= limit && ids.every((id) => typeof id === "string" && /^[a-f0-9]{32}$/.test(id));
+  if (!value || !validIDs(value.knowledge_base_ids, 20) || !validIDs(value.document_ids, 100)) return emptyChatScope();
+  return { knowledge_base_ids: [...new Set(value.knowledge_base_ids)], document_ids: [...new Set(value.document_ids)] };
+}
+function currentChatScope() {
+  return chatScopes.get(state.sid) ?? null;
+}
+function normalizeChatScope(scope) {
+  if (scope === null) return null;
+  return { knowledge_base_ids: [...new Set(scope.knowledge_base_ids)], document_ids: [...new Set(scope.document_ids)]
+    .filter((id) => !scope.knowledge_base_ids.includes(chatDocuments.get(id)?.knowledge_base_id)) };
+}
+function missingChatResources(scope = currentChatScope()) {
+  if (scope === null) return [];
+  return [...scope.knowledge_base_ids.filter((id) => !state.knowledgeBases.some((kb) => kb.id === id)),
+    ...scope.document_ids.filter((id) => chatDocuments.has(id) && !chatDocuments.get(id))];
+}
+async function refreshChatDocuments(scope = currentChatScope()) {
+  const workspace = state.wid, epoch = authEpoch;
+  for (const id of scope?.document_ids || []) {
+    let doc;
+    try { doc = await api(wp() + "/documents/" + enc(id)); }
+    catch (error) { if (![403, 404].includes(error.status)) throw error; doc = null; }
+    if (workspace !== state.wid || epoch !== authEpoch) return;
+    chatDocuments.set(id, doc);
+  }
+  renderChatScope();
+}
+function setChatScope(scope) {
+  chatScopes.set(state.sid, normalizeChatScope(scope));
+  renderChatScope();
+  rememberNavigation();
+}
+function chatScopeLocked() {
+  return state.busy || !state.sid || ["running", "suspended"].includes(state.runStatus);
+}
+function renderChatScope() {
+  const scope = currentChatScope(), missing = missingChatResources(scope);
+  const locked = chatScopeLocked(), count = (scope?.knowledge_base_ids.length || 0) + (scope?.document_ids.length || 0);
+  const trigger = $("chat-knowledge-scope");
+  trigger.textContent = scope === null ? "@ 全部知识库" : count ? `@ 已选 ${count} 项资料` : "@ 不使用知识库";
+  trigger.disabled = locked;
+  const chips = $("chat-scope-chips");
+  chips.replaceChildren();
+  for (const kind of ["knowledge_base", "document"]) for (const id of scope?.[kind + "_ids"] || []) {
+    const item = kind === "knowledge_base" ? state.knowledgeBases.find((kb) => kb.id === id) : chatDocuments.get(id);
+    const missing = kind === "knowledge_base" ? !item : chatDocuments.has(id) && !item;
+    const name = item?.name || item?.title || (kind === "knowledge_base" ? "知识库已不可用" : missing ? "文档已不可用" : "文档待核对");
+    const chip = button((kind === "knowledge_base" ? "▤ " : "▧ ") + name + " ×", () => {
+      const next = copyChatScope(currentChatScope());
+      next[kind + "_ids"] = next[kind + "_ids"].filter((value) => value !== id);
+      setChatScope(next);
+    }, "chat-scope-chip" + (missing ? " unavailable" : ""));
+    chip.dataset.kind = kind; chip.dataset.id = id;
+    chip.title = name;
+    chip.setAttribute("aria-label", "移除" + (kind === "knowledge_base" ? "知识库：" : "文档：") + name);
+    chip.disabled = locked;
+    chips.append(chip);
+  }
+  $("chat-scope-hint").textContent = ["running", "suspended"].includes(state.runStatus)
+    ? "当前运行及其确认沿用发送时的资料范围；结束后可调整下次提问。"
+    : missing.length ? "已选资料已删除或不可访问，请移除或重新选择后发送。"
+    : scope === null ? "输入 @ 选择知识库或文档；未选择时，可使用当前空间的全部知识库。"
+    : count ? "使用所选的整个知识库及单独文档；同库文档已包含在全库范围内。"
+    : "下次提问不使用知识库中的文档；仍可使用对话与个人记忆。";
+  $("chat-scope-hint").classList.toggle("scope-error", missing.length > 0);
+  if (locked) closeMentionPicker();
+}
+function renderChatScopeSummary() {
+  if (!chatScopeDraft) return;
+  const { mode, scope } = chatScopeDraft, missing = missingChatResources(scope);
+  const count = scope.knowledge_base_ids.length + scope.document_ids.length;
+  $("chat-scope-summary").textContent = mode === "all" ? "可使用当前空间的全部知识库，包括之后新增的知识库。"
+    : mode === "none" ? "不读取、检索或修改知识库文档。对话和个人记忆仍可使用。"
+    : missing.length ? `有 ${missing.length} 项已选资料不可用，请取消选择。`
+    : `已选 ${scope.knowledge_base_ids.length} / 20 个知识库、${scope.document_ids.length} / 100 份文档` + (count ? " · 全库包含同库文档" : " · 请至少选择一项");
+  $("chat-scope-apply").disabled = mode === "selected" && (!count || missing.length > 0);
+}
+function pickerIsCurrent(picker) {
+  return (picker === chatScopeDraft || picker === chatMention) && picker.workspace === state.wid && picker.session === state.sid;
+}
+function pickerPrefix(picker) { return picker === chatScopeDraft ? "chat-scope" : "chat-mention"; }
+function pickerScope(picker) { return picker === chatScopeDraft ? picker.scope : currentChatScope() || emptyChatScope(); }
+function resourceOptions(picker) {
+  if (picker.tab === "document") return [...(picker.docs || []), ...pickerScope(picker).document_ids
+    .filter((id) => chatDocuments.has(id) && !chatDocuments.get(id) && !(picker.docs || []).some((doc) => doc.id === id))
+    .map((id) => ({ id, title: "文档已不可用", missing: true }))];
+  const query = picker.query.toLocaleLowerCase();
+  const scope = pickerScope(picker);
+  return [...state.knowledgeBases, ...scope.knowledge_base_ids.filter((id) => !state.knowledgeBases.some((kb) => kb.id === id))
+    .map((id) => ({ id, name: "知识库已不可用", missing: true }))]
+    .filter((kb) => kb.missing || !query || (kb.name + " " + (kb.description || "")).toLocaleLowerCase().includes(query));
+}
+function chooseResource(picker, item, checked = true) {
+  if (chatScopeLocked() || !pickerIsCurrent(picker)) return;
+  const kind = picker.tab, key = kind + "_ids", scope = copyChatScope(pickerScope(picker));
+  if (kind === "document" && scope.knowledge_base_ids.includes(item.knowledge_base_id)) return;
+  if (checked && !scope[key].includes(item.id) && scope[key].length >= (kind === "document" ? 100 : 20)) { note("最多选择 20 个知识库及 100 份单独文档。"); return; }
+  scope[key] = checked ? [...new Set([...scope[key], item.id])] : scope[key].filter((id) => id !== item.id);
+  if (kind === "document" && !item.missing) chatDocuments.set(item.id, item);
+  if (picker === chatScopeDraft) {
+    picker.scope = normalizeChatScope(scope);
+    renderChatScopeOptions();
+    $("chat-scope-options").querySelector(`input[value="${item.id}"]`)?.focus();
+  } else {
+    setChatScope(scope);
+    const input = $("query");
+    input.setRangeText("", picker.start, picker.end, "end");
+    closeMentionPicker();
+    input.focus();
+    syncAvailability();
+  }
+}
+function renderResourcePicker(picker) {
+  if (!pickerIsCurrent(picker)) return;
+  const prefix = pickerPrefix(picker), target = $(prefix + "-options"), pages = $(prefix + "-pages");
+  target.replaceChildren(); pages.replaceChildren();
+  $(prefix + "-tabs").querySelectorAll("button").forEach((tab) => {
+    const active = tab.dataset.kind === picker.tab;
+    tab.setAttribute("aria-selected", String(active)); tab.classList.toggle("active", active);
+  });
+  if (picker.loading || picker.error) { empty(target, picker.error || "正在查找文档…"); return; }
+  const scope = pickerScope(picker), options = resourceOptions(picker);
+  picker.active = Math.min(picker.active || 0, Math.max(0, options.length - 1));
+  options.forEach((item, index) => {
+    const kind = picker.tab, covered = kind === "document" && scope.knowledge_base_ids.includes(item.knowledge_base_id);
+    const selected = covered || scope[kind + "_ids"].includes(item.id);
+    const label = node(picker === chatScopeDraft ? "label" : "button", undefined, "chat-scope-option");
+    label.dataset.kind = kind; label.dataset.id = item.id;
+    const text = node("span"), kb = state.knowledgeBases.find((kb) => kb.id === item.knowledge_base_id);
+    text.append(node("strong", item.name || item.title), node("small", kind === "document"
+      ? item.missing ? "请取消此项后重新选择" : (kb?.name || "知识库") + (covered ? " · 已包含在所选知识库中" : selected ? " · 已选择" : " · 单独文档")
+      : item.missing ? "请取消此项后重新选择" : item.description || "整个知识库"));
+    const disabled = covered || (!selected && scope[kind + "_ids"].length >= (kind === "document" ? 100 : 20));
+    if (picker === chatScopeDraft) {
+      const input = node("input"); input.type = "checkbox"; input.value = item.id;
+      input.checked = selected; input.disabled = disabled;
+      input.addEventListener("change", () => chooseResource(picker, item, input.checked));
+      label.append(input, text);
+    } else {
+      label.type = "button"; label.id = "mention-option-" + index; label.setAttribute("role", "option");
+      label.setAttribute("aria-selected", String(index === picker.active)); label.classList.toggle("active", index === picker.active);
+      label.disabled = disabled || item.missing;
+      label.addEventListener("mousedown", (event) => event.preventDefault());
+      label.addEventListener("click", () => chooseResource(picker, item)); label.append(text);
+    }
+    target.append(label);
+  });
+  if (!options.length) empty(target, picker.query ? "没有匹配的" + (picker.tab === "document" ? "文档" : "知识库") : "当前空间暂无" + (picker.tab === "document" ? "文档" : "知识库"));
+  if (picker !== chatScopeDraft) {
+    if (options.length) $("query").setAttribute("aria-activedescendant", "mention-option-" + picker.active);
+    else $("query").removeAttribute("aria-activedescendant");
+  }
+  if (picker.tab === "document" && picker.total > 20) {
+    const max = Math.ceil(picker.total / 20);
+    for (const [label, next, disabled] of [["上一页", picker.page - 1, picker.page <= 1], ["下一页", picker.page + 1, picker.page >= max]]) {
+      const b = node("button", label, "small"); b.type = "button"; b.disabled = disabled;
+      b.addEventListener("click", () => { picker.page = next; loadPickerDocuments(picker); }); pages.append(b);
+    }
+    pages.append(node("small", `${picker.page} / ${max} · ${picker.total} 份`));
+  }
+}
+async function loadPickerDocuments(picker) {
+  const revision = ++picker.revision, epoch = authEpoch;
+  picker.loading = true; picker.error = ""; renderResourcePicker(picker);
+  try {
+    const result = await request(wp() + `/documents?keyword=${enc(picker.query)}&page=${picker.page}&page_size=20`);
+    if (!pickerIsCurrent(picker) || revision !== picker.revision || epoch !== authEpoch) return;
+    picker.docs = result.data || []; picker.total = result.total || 0;
+    for (const doc of picker.docs) chatDocuments.set(doc.id, doc);
+    picker.loading = false; renderResourcePicker(picker); renderChatScope();
+  } catch (error) {
+    if (!pickerIsCurrent(picker) || revision !== picker.revision || epoch !== authEpoch) return;
+    picker.loading = false; picker.error = error.message; renderResourcePicker(picker);
+  }
+}
+function changePickerTab(picker, tab) {
+  if (!picker || !pickerIsCurrent(picker)) return;
+  picker.revision++; clearTimeout(picker.timer);
+  picker.tab = tab; picker.page = 1; picker.active = 0; picker.loading = false; picker.error = "";
+  if (tab === "document") loadPickerDocuments(picker); else renderResourcePicker(picker);
+}
+function updatePickerQuery(picker, query) {
+  picker.query = query; picker.page = 1; picker.active = 0; picker.error = ""; picker.revision++;
+  clearTimeout(picker.timer);
+  if (picker.tab === "document") {
+    picker.loading = true; renderResourcePicker(picker);
+    picker.timer = setTimeout(() => loadPickerDocuments(picker), 180);
+  } else renderResourcePicker(picker);
+}
+function newPicker(scope = null) {
+  return { scope: copyChatScope(scope) || emptyChatScope(), tab: "knowledge_base", query: "", docs: [], page: 1, total: 0,
+    active: 0, revision: 0, workspace: state.wid, session: state.sid, loading: false, error: "" };
+}
+function renderChatScopeOptions() {
+  if (!chatScopeDraft) return;
+  document.querySelectorAll('[name="chat-scope-mode"]').forEach((input) => { input.checked = input.value === chatScopeDraft.mode; });
+  $("chat-scope-picker").hidden = chatScopeDraft.mode !== "selected";
+  renderResourcePicker(chatScopeDraft); renderChatScopeSummary();
+}
+bind("chat-knowledge-scope", async () => {
+  if (!state.sid || ["running", "suspended"].includes(state.runStatus)) return;
+  closeMentionPicker();
+  await loadKnowledgeBases(); await refreshChatDocuments();
+  const scope = currentChatScope();
+  chatScopeDraft = { ...newPicker(scope), mode: scope === null ? "all" : scope.knowledge_base_ids.length + scope.document_ids.length ? "selected" : "none" };
+  $("chat-scope-search").value = ""; renderChatScopeOptions(); $("chat-scope-dialog").showModal();
+});
+document.querySelectorAll('[name="chat-scope-mode"]').forEach((input) => input.addEventListener("change", () => {
+  if (state.busy || !chatScopeDraft) return;
+  chatScopeDraft.mode = input.value; renderChatScopeOptions();
+}));
+$("chat-scope-search").addEventListener("input", () => { if (chatScopeDraft) updatePickerQuery(chatScopeDraft, $("chat-scope-search").value.trim()); });
+$("chat-scope-dialog").addEventListener("close", () => { clearTimeout(chatScopeDraft?.timer); chatScopeDraft = null; });
+bind("chat-scope-cancel", () => $("chat-scope-dialog").close());
+bind("chat-scope-refresh", async () => {
+  await loadKnowledgeBases(); await refreshChatDocuments(chatScopeDraft?.scope);
+  if (chatScopeDraft?.tab === "document") await loadPickerDocuments(chatScopeDraft); else renderChatScopeOptions();
+});
+bind("chat-scope-apply", () => {
+  if (!chatScopeDraft) return;
+  const { mode, scope } = chatScopeDraft;
+  if (mode === "selected" && (!(scope.knowledge_base_ids.length + scope.document_ids.length) || missingChatResources(scope).length)) return;
+  setChatScope(mode === "all" ? null : mode === "none" ? emptyChatScope() : scope);
+  $("chat-scope-dialog").close();
+});
+for (const prefix of ["chat-scope", "chat-mention"]) $(prefix + "-tabs").querySelectorAll("button").forEach((tab) => {
+  tab.addEventListener("click", () => { if (!state.busy) changePickerTab(prefix === "chat-scope" ? chatScopeDraft : chatMention, tab.dataset.kind); });
+});
+function closeMentionPicker() {
+  clearTimeout(chatMention?.timer); chatMention = null;
+  $("chat-mention-picker").hidden = true; $("chat-mention-options").replaceChildren(); $("chat-mention-pages").replaceChildren();
+  $("query").setAttribute("aria-expanded", "false"); $("query").removeAttribute("aria-activedescendant");
+}
+function updateMentionPicker() {
+  if (queryComposing || chatScopeLocked()) { closeMentionPicker(); return; }
+  const input = $("query"), end = input.selectionStart;
+  const match = /(?:^|[^a-zA-Z0-9_.+%/\-])@([^\s@]{0,100})$/.exec(input.value.slice(0, end));
+  if (!match || input.selectionEnd !== end) { closeMentionPicker(); return; }
+  const start = end - match[1].length - 1;
+  if (!chatMention || chatMention.start !== start) {
+    closeMentionPicker(); chatMention = { ...newPicker(), start, end };
+    const picker = chatMention;
+    loadKnowledgeBases().then(() => { if (pickerIsCurrent(picker)) renderResourcePicker(picker); }).catch((error) => {
+      if (pickerIsCurrent(picker)) { picker.error = error.message; renderResourcePicker(picker); }
+    });
+  }
+  chatMention.end = end;
+  $("chat-mention-picker").hidden = false; $("query").setAttribute("aria-expanded", "true");
+  updatePickerQuery(chatMention, match[1]);
+}
+$("query").addEventListener("input", updateMentionPicker);
+$("query").addEventListener("click", updateMentionPicker);
+$("query").addEventListener("compositionstart", () => { queryComposing = true; closeMentionPicker(); });
+$("query").addEventListener("compositionend", () => { queryComposing = false; updateMentionPicker(); });
+$("query").addEventListener("keydown", (event) => {
+  if (!chatMention || queryComposing || event.isComposing || event.keyCode === 229) return;
+  if (event.key === "Escape") { event.preventDefault(); closeMentionPicker(); return; }
+  if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+    event.preventDefault();
+    const options = [...$("chat-mention-options").querySelectorAll('button:not(:disabled)')];
+    if (!options.length) return;
+    const current = options.findIndex((option) => option.getAttribute("aria-selected") === "true");
+    const next = (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+    chatMention.active = Number(options[next].id.replace("mention-option-", ""));
+    renderResourcePicker(chatMention); $("mention-option-" + chatMention.active)?.scrollIntoView({ block: "nearest" });
+  } else if (event.key === "Enter" && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    $("mention-option-" + chatMention.active)?.click();
+  }
+});
+$("chat-mention-close").addEventListener("click", closeMentionPicker);
+document.addEventListener("pointerdown", (event) => {
+  if (event.target !== $("query") && !$("chat-mention-picker").contains(event.target)) closeMentionPicker();
+});
+function resetDocumentView() {
+  documentsRevision++;
+  state.docPage = 1;
+  state.docTotal = 0;
+  clearSearch();
+  $("documents").replaceChildren();
+  $("doc-pages").replaceChildren();
+}
+async function loadKnowledgeBases(preferred = state.kid) {
+  const workspace = state.wid;
+  if (!workspace) return;
+  const knowledgeBases = await api(wp() + "/knowledge-bases");
+  if (workspace !== state.wid) return;
+  state.knowledgeBases = knowledgeBases || [];
+  const selected = state.knowledgeBases.find((item) => item.id === preferred)
+    || state.knowledgeBases.find((item) => item.is_default) || state.knowledgeBases[0];
+  const next = selected?.id || "";
+  if (next !== state.kid) resetDocumentView();
+  state.kid = next;
+  renderKnowledgeBases();
+}
+$("knowledge-base").addEventListener("change", () => act(async () => {
+  const id = $("knowledge-base").value;
+  if (!state.knowledgeBases.some((item) => item.id === id)) return;
+  state.kid = id;
+  resetDocumentView();
+  renderKnowledgeBases();
+  $("detail").close();
+  $("upload-dialog").close();
+  await loadDocs();
+}));
+function editKnowledgeBase(knowledgeBase = null) {
+  if (!manageKnowledgeBases()) throw Error("当前角色没有管理知识库的权限");
+  const workspace = state.wid, base = wp() + "/knowledge-bases";
+  const body = showDetail(knowledgeBase ? "编辑知识库" : "新建知识库");
+  const formNode = node("form"), nameLabel = node("label", "知识库名称"), name = node("input");
+  name.name = "name"; name.required = true; name.maxLength = 100;
+  name.value = knowledgeBase?.name || ""; name.setAttribute("aria-label", "知识库名称");
+  nameLabel.append(name);
+  const descriptionLabel = node("label", "说明（可选）"), description = node("textarea");
+  description.name = "description"; description.rows = 3; description.maxLength = 2000;
+  description.value = knowledgeBase?.description || ""; description.setAttribute("aria-label", "知识库说明");
+  descriptionLabel.append(description);
+  const submit = node("button", knowledgeBase ? "保存知识库" : "创建知识库", "primary");
+  submit.type = "submit";
+  formNode.append(nameLabel, descriptionLabel, submit); body.append(formNode);
+  formNode.addEventListener("submit", (event) => {
+    event.preventDefault();
+    act(async () => {
+      if (workspace !== state.wid || !manageKnowledgeBases()) throw Error("空间或权限已变化，请重新打开表单");
+      if (!name.value.trim()) throw Error("请输入知识库名称");
+      const result = await api(base + (knowledgeBase ? "/" + enc(knowledgeBase.id) : ""), knowledgeBase ? "PATCH" : "POST", {
+        name: name.value.trim(), description: description.value.trim(),
+      });
+      $("detail").close();
+      await loadKnowledgeBases(result.id);
+      await loadDocs();
+      note(knowledgeBase ? "知识库已更新。" : "知识库已创建，可以上传资料。");
+    });
+  });
+  name.focus();
+}
+bind("new-knowledge-base", () => editKnowledgeBase());
+bind("edit-knowledge-base", () => {
+  const current = state.knowledgeBases.find((item) => item.id === state.kid);
+  if (current) editKnowledgeBase(current);
+});
+bind("delete-knowledge-base", () => {
+  if (!manageKnowledgeBases()) throw Error("当前角色没有删除知识库的权限");
+  const current = state.knowledgeBases.find((item) => item.id === state.kid), base = kp();
+  if (!current) return;
+  confirmDialog("删除知识库", `确定删除知识库“${current.name}”？其中全部文档、历史版本及来源引用将不可访问，原文件和检索索引将在后台清理，无法恢复。此操作不会删除工作空间、会话或个人记忆。`, async () => {
+    await api(base, "DELETE");
+    $("detail").close();
+    state.knowledgeBases = state.knowledgeBases.filter((item) => item.id !== current.id);
+    state.kid = "";
+    resetDocumentView();
+    renderKnowledgeBases();
+    await loadKnowledgeBases();
+    await loadDocs();
+    note("知识库已删除，相关文件和索引将在后台清理。会话和个人记忆已保留。");
+  });
+});
 async function loadDocs() {
-  if (!state.wid) return;
-  const result = await request(wp() + `/documents?page=${state.docPage}&page_size=10`);
+  const workspace = state.wid, knowledgeBase = state.kid, revision = ++documentsRevision;
+  if (!workspace || !knowledgeBase) {
+    resetDocumentView();
+    empty($("documents"), !workspace ? "创建一个空间，开始收藏资料。" : manageKnowledgeBases()
+      ? "还没有知识库。点击“新建知识库”，再上传你的第一份资料。" : "当前空间暂无知识库，请联系管理员创建。");
+    return;
+  }
+  const base = wp();
+  const result = await request(kp() + `/documents?page=${state.docPage}&page_size=10`);
+  if (revision !== documentsRevision || workspace !== state.wid || knowledgeBase !== state.kid) return;
   if (!result.data?.length && result.total > 0 && state.docPage > 1) {
     state.docPage--;
     return loadDocs();
@@ -600,7 +1050,7 @@ async function loadDocs() {
   const target = $("documents");
   target.replaceChildren();
   if (!result.data?.length) {
-    empty(target, writable() ? "知识库还空着。上传第一份资料，让知识在这里积累。" : "当前空间还没有文档，请联系协作者添加资料。");
+    empty(target, writable() ? "知识库还空着。上传第一份资料，让知识在这里积累。" : "当前知识库还没有文档，请联系协作者添加资料。");
   }
   // Index reads are independent. Render metadata immediately and check this page together.
   await Promise.allSettled((result.data || []).map(async (d) => {
@@ -617,37 +1067,43 @@ async function loadDocs() {
     card.append(icon, meta, badge, button("查看详情 →", () => documentDetail(d.id), "text-button"));
     target.append(card);
     try {
-      const job = await api(wp() + `/documents/${enc(d.id)}/versions/${enc(d.current_version_id)}/index`);
+      const job = await api(base + `/documents/${enc(d.id)}/versions/${enc(d.current_version_id)}/index`);
+      if (revision !== documentsRevision || workspace !== state.wid || knowledgeBase !== state.kid) return;
       const status = indexPresentation(job);
       badge.textContent = status.label;
       badge.className = "pill " + status.className;
       if (job.error_code) badge.title = job.error_code;
     } catch (e) {
+      if (revision !== documentsRevision || workspace !== state.wid || knowledgeBase !== state.kid) return;
       badge.textContent = "索引不可用";
       badge.className = "pill status-unavailable";
       badge.title = e.message;
     }
   }));
+  if (revision !== documentsRevision || workspace !== state.wid || knowledgeBase !== state.kid) return;
   pager("doc-pages", result, async (p) => {
     state.docPage = p;
     await loadDocs();
   });
 }
-bind("refresh-docs", loadDocs);
+bind("refresh-docs", async () => { await loadKnowledgeBases(); await loadDocs(); });
 bind("show-upload", () => {
   if (!writable()) throw Error("当前角色没有上传权限");
+  if (!state.kid) throw Error("请先选择知识库");
   $("upload-dialog").showModal();
 });
 bind("close-upload", () => $("upload-dialog").close());
 bind("clear-search", clearSearch);
 form("upload-form", async (f) => {
-  if (!state.wid) throw Error("请先创建空间");
+  if (!state.wid || !state.kid) throw Error("请先选择知识库");
+  const workspace = state.wid, knowledgeBase = state.kid, base = kp();
   const file = f.get("file");
   validateUpload(file, await uploadLimits());
   const data = new FormData();
   data.set("file", file);
   if (f.get("title").trim()) data.set("title", f.get("title").trim());
-  await api(wp() + "/documents", "POST", data);
+  await api(base + "/documents", "POST", data);
+  if (workspace !== state.wid || knowledgeBase !== state.kid) return;
   $("upload-form").reset();
   $("upload-dialog").close();
   clearSearch();
@@ -687,12 +1143,14 @@ async function documentDetail(id, page = 1) {
         () =>
           confirmDialog(
             "删除文档",
-            "删除后文档和历史版本将不可访问，当前界面不支持恢复。请确认目标：" +
+            "删除后文档及全部历史版本立即不可访问，原文件和检索索引将在后台清理，无法恢复。请确认目标：" +
               d.title,
             async () => {
               await api(base, "DELETE");
+              clearSearch();
               $("detail").close();
               await loadDocs();
+              note("文档已删除，相关文件和索引将在后台清理。");
             },
           ),
         "danger",
@@ -714,6 +1172,7 @@ async function documentDetail(id, page = 1) {
         f.set("file", file);
         f.set("base_version_id", d.current_version_id);
         await api(base + "/versions", "POST", f);
+        clearSearch();
         await documentDetail(id);
         await loadDocs();
       });
@@ -765,6 +1224,7 @@ async function documentDetail(id, page = 1) {
                     base_version_id: v.id,
                     content: edit.value,
                   });
+                  clearSearch();
                   await documentDetail(id);
                   await loadDocs();
                   note("新版本已保存，等待索引。");
@@ -795,11 +1255,14 @@ async function documentDetail(id, page = 1) {
   body.append(pages);
 }
 form("search-form", async (f) => {
-  const result = await api(wp() + "/search", "POST", {
+  if (!state.wid || !state.kid) throw Error("请先选择知识库");
+  const workspace = state.wid, knowledgeBase = state.kid, revision = ++searchRevision;
+  const result = await api(kp() + "/search", "POST", {
     query: f.get("query"),
     mode: f.get("mode"),
     limit: 10,
   });
+  if (revision !== searchRevision || workspace !== state.wid || knowledgeBase !== state.kid) return;
   const target = $("search-results");
   target.replaceChildren();
   $("documents").hidden = true;
@@ -839,7 +1302,9 @@ async function loadSessions() {
       button(
         s.title,
         async () => {
+          closeMentionPicker();
           state.sid = s.id;
+          await refreshChatDocuments();
           state.rid = "";
           state.messagePage = 1;
           state.runStatus = "";
@@ -885,6 +1350,7 @@ bind("delete-session", () => {
   if (!state.sid) return;
   confirmDialog("删除会话", "此会话及其消息将被删除。请确认目标：" + $("session-title").textContent, async () => {
     await api(sp(), "DELETE");
+    chatScopes.delete(state.sid);
     state.sid = state.rid = state.runStatus = "";
     $("session-title").textContent = "选择或创建会话";
     $("query").value = "";
@@ -903,7 +1369,7 @@ document.querySelectorAll("[data-suggestion]").forEach((b) => {
   });
 });
 $("query").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.isComposing && !$("send").disabled) {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !queryComposing && !e.isComposing && e.keyCode !== 229 && !$("send").disabled) {
     e.preventDefault();
     $("chat-form").requestSubmit();
   }
@@ -1058,11 +1524,11 @@ async function inspectRun() {
   $("run-state").replaceChildren();
   if (run.status !== "completed") {
     const labels = {
-      running: ["Agent 正在处理问题", "刷新状态可查看最新结果，请勿重复发送。"],
+      running: ["Agent 正在处理问题", "本次运行沿用发送时的知识库范围。刷新状态可查看最新结果，请勿重复发送。"],
       failed: [run.error_code === "agent_canceled" ? "生成已停止" : "这次回答尚未完成", recoverable
-        ? "你的问题已保留。可恢复原运行，或继续发送新问题。"
+        ? "你的问题已保留。恢复将沿用原运行的知识库范围；也可调整范围后发送新问题。"
         : "你的问题已保留，可以继续发送新问题。"],
-      suspended: ["等待你的确认", "完成下方答复或审批后，Agent 将继续处理。"],
+      suspended: ["等待你的确认", "完成下方答复或审批后，Agent 将沿用本次运行原有的知识库范围继续处理。"],
     };
     const [title, description] = labels[run.status] || ["运行状态待确认", "请刷新状态后查看结果。"];
     status.append(node("strong", title), node("p", description));
@@ -1132,6 +1598,13 @@ async function renderPrompt(p) {
         `目标：${a.document_id || "新文档"} · 基线：${a.base_version_id || "无"} · 新正文 ${a.content_bytes} 字节`,
       ),
     );
+    if (a.tool === "create_document") {
+      const targetID = a.knowledge_base_id || args?.knowledge_base_id;
+      const target = state.knowledgeBases.find((item) => item.id === targetID);
+      box.append(node("p", targetID
+        ? `目标知识库：${target?.name || "名称暂不可用"} · ID：${targetID}`
+        : "目标知识库：执行时的默认知识库（未指定固定知识库 ID）。", "approval-target"));
+    }
     if (!args || typeof args.content !== "string")
       throw Error("审批内容不可用，请刷新状态");
     let before = "";
@@ -1294,9 +1767,18 @@ async function stream(path, data) {
 $("stop").addEventListener("click", () => state.controller?.abort());
 form("chat-form", async () => {
   if (!state.sid) throw Error("请先创建或选择会话");
+  if (["running", "suspended"].includes(state.runStatus)) throw Error("请先完成当前运行");
   const content = $("query").value;
   if (!content.trim()) return;
-  const accepted = await stream(sp() + "/messages", { content });
+  closeMentionPicker();
+  const session = state.sid, workspace = state.wid;
+  await loadKnowledgeBases(); await refreshChatDocuments();
+  if (session !== state.sid || workspace !== state.wid) throw Error("会话已变化，请重新发送");
+  const scope = normalizeChatScope(currentChatScope());
+  if (missingChatResources(scope).length) throw Error("已选资料已删除或不可访问，请重新选择后发送");
+  const accepted = await stream(sp() + "/messages", {
+    content, ...(scope === null ? {} : scope),
+  });
   if (accepted) $("query").value = "";
 });
 bind("refresh-chat", async () => {

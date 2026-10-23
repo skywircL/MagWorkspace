@@ -284,8 +284,16 @@ func TestMySQLDocumentApprovalDenialAndRevalidation(t *testing.T) {
 			if scenario == "delete-after-approve" {
 				var n int
 				must(t, s.pool.QueryRow(`SELECT COUNT(*) FROM document_versions WHERE document_id=?`, doc.Document.ID).Scan(&n))
-				if n != 1 {
+				if n != 0 {
 					t.Fatal("write resurrected deleted document")
+				}
+				must(t, s.pool.QueryRow(`SELECT COUNT(*) FROM documents WHERE id=?`, doc.Document.ID).Scan(&n))
+				if n != 0 {
+					t.Fatal("write recreated deleted document metadata")
+				}
+				must(t, s.pool.QueryRow(`SELECT COUNT(*) FROM run_document_approvals WHERE result IS NOT NULL`).Scan(&n))
+				if n != 0 {
+					t.Fatal("receipt for deleted document write")
 				}
 				return
 			}

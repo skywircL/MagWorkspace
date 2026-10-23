@@ -47,11 +47,11 @@ func checkMutationTargetTx(ctx context.Context, tx *sql.Tx, uid, wid, rid, tool 
 	if !canWriteDocument(role) {
 		return domain.ErrForbidden
 	}
-	scope, err := runDocumentScopeTx(ctx, tx, rid)
+	scope, err := resolveRunResourceScopeTx(ctx, tx, wid, rid, nil)
 	if err != nil {
 		return err
 	}
-	valid, err := runSourcesValidTx(ctx, tx, wid, rid, scope)
+	valid, err := runSourcesValidInScopeTx(ctx, tx, wid, rid, scope)
 	if err != nil {
 		return err
 	}
@@ -59,22 +59,22 @@ func checkMutationTargetTx(ctx context.Context, tx *sql.Tx, uid, wid, rid, tool 
 		return domain.ErrConflict
 	}
 	if tool == "create_document" {
-		if scope != nil {
+		// A document-only target cannot authorize a new sibling. Restricted
+		// runs must name a whole-library target in the approved arguments.
+		if !scope.All && (in.KnowledgeBaseID == "" || !scope.AllowsCreate(in.KnowledgeBaseID)) {
 			return domain.ErrForbidden
 		}
+		if in.KnowledgeBaseID != "" {
+			if _, err := resolveRunResourceScopeTx(ctx, tx, wid, rid, []string{in.KnowledgeBaseID}); err != nil {
+				return err
+			}
+		}
+		meta.KnowledgeBaseID = in.KnowledgeBaseID
 		meta.Title, meta.Filename = in.Title, in.Filename
 		return nil
 	}
-	if scope != nil {
-		found := false
-		for _, id := range scope {
-			if id == in.DocumentID {
-				found = true
-			}
-		}
-		if !found {
-			return domain.ErrForbidden
-		}
+	if err := runAllowsDocumentTx(ctx, tx, wid, rid, in.DocumentID); err != nil {
+		return err
 	}
 	d, err := documentInWorkspace(ctx, tx, wid, in.DocumentID)
 	if err != nil {
@@ -236,18 +236,18 @@ func (g *documentWriteGate) check(ctx context.Context, tx *sql.Tx, out *domain.D
 			return false, blob.ErrIntegrity
 		}
 		// Replayed receipt never leaks a deleted/foreign document.
-		if _, err = documentInWorkspace(ctx, tx, g.wid, out.Document.ID); err != nil {
+		if err = runAllowsDocumentTx(ctx, tx, g.wid, g.rid, out.Document.ID); err != nil {
 			return false, err
 		}
-		scope, err := runDocumentScopeTx(ctx, tx, g.rid)
+		scope, err := resolveRunResourceScopeTx(ctx, tx, g.wid, g.rid, nil)
 		if err != nil {
 			return false, err
 		}
-		valid, err := runSourcesValidTx(ctx, tx, g.wid, g.rid, scope)
+		valid, err := runSourcesValidInScopeTx(ctx, tx, g.wid, g.rid, scope)
 		if err != nil {
 			return false, err
 		}
-		if !valid || (scope != nil && !slices.Contains(scope, out.Document.ID)) {
+		if !valid {
 			return false, domain.ErrConflict
 		}
 		return true, nil
@@ -308,7 +308,7 @@ func (s *Store) ExecuteDocumentWrite(ctx context.Context, uid, wid, sid, rid, ca
 		return out, err
 	}
 	if tool == "create_document" {
-		out, err = s.createDocument(ctx, uid, wid, in.Title, in.Filename, []byte(in.Content), gate)
+		out, err = s.createKnowledgeBaseDocument(ctx, uid, wid, in.KnowledgeBaseID, in.Title, in.Filename, []byte(in.Content), gate)
 	} else {
 		out, err = s.appendDocumentVersion(ctx, uid, wid, in.DocumentID, in.BaseVersionID, meta.Filename, []byte(in.Content), gate)
 	}

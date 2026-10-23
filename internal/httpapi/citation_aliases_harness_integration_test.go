@@ -65,6 +65,10 @@ func TestHTTPCitationAliasesRealHarnessSecondTurnAndCommittedRecovery(t *testing
 						t.Error(err)
 						return
 					}
+					if len(in.Messages) > 0 && strings.Contains(in.Messages[0].Content, "MagWorkspace query understanding") {
+						fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"not-json"},"finish_reason":"stop"}]}`)
+						return
+					}
 					for _, tool := range in.Tools {
 						if tool.Function.Name == "resolve_citation_aliases" {
 							t.Error("private alias operation exposed to model")

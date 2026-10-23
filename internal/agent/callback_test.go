@@ -75,13 +75,13 @@ func TestHTTPCallbackCapabilitiesStayBoundToAuthenticatedRun(t *testing.T) {
 	type boundContextKey struct{}
 	for _, name := range []string{"alice-workspace", "bob-workspace"} {
 		request := requestForTest()
-		request.ToolHandler = func(ctx context.Context, tool string, arguments json.RawMessage) (any, error) {
+		request.ToolHandler = testToolCapabilities(func(ctx context.Context, tool string, arguments json.RawMessage) (any, error) {
 			tools.Add(1)
 			if ctx.Value(boundContextKey{}) != name {
 				return nil, errors.New("wrong caller context")
 			}
 			return map[string]string{"workspace": name}, nil
-		}
+		})
 		request.JournalHandler = func(context.Context, string, json.RawMessage) (any, error) {
 			journals.Add(1)
 			return map[string]any{"records": []any{}}, nil
@@ -147,12 +147,12 @@ func TestHTTPCallbackCancellationRevokesAndCancelsInflightWork(t *testing.T) {
 			defer cancel()
 			started, canceled := make(chan struct{}), make(chan struct{})
 			request := requestForTest()
-			request.ToolHandler = func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
 				close(started)
 				<-ctx.Done()
 				close(canceled)
 				return nil, ctx.Err()
-			}
+			})
 			endpoints, _ := registerTestCallbacks(t, gateway, ctx, request)
 			done := make(chan struct{})
 			go func() {
@@ -191,7 +191,7 @@ func TestHTTPCallbackRejectsDuplicateAuthenticationAndRevokesOnMarshalFailure(t 
 	gateway := newTestCallbackGateway(t)
 	var calls atomic.Int32
 	request := requestForTest()
-	request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) { calls.Add(1); return nil, nil }
+	request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) { calls.Add(1); return nil, nil })
 	endpoints, cleanup := registerTestCallbacks(t, gateway, context.Background(), request)
 	for _, invalid := range []string{"missing", "duplicate", "forged", "unknown path"} {
 		t.Run(invalid, func(t *testing.T) {
@@ -238,7 +238,7 @@ func TestHTTPCallbackConcurrentRunsAndRevocation(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			request := requestForTest()
-			request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil }
+			request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil })
 			payload, cleanup, err := gateway.payload(ctx, request)
 			if err != nil {
 				t.Error(err)
@@ -266,7 +266,7 @@ func TestHTTPCallbackConcurrentRunsAndRevocation(t *testing.T) {
 func TestHTTPHarnessCompletionRevokesAllCallbackCapabilities(t *testing.T) {
 	var endpoints callbackEndpoints
 	request := requestForTest()
-	request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil }
+	request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) { return map[string]bool{"ok": true}, nil })
 	request.JournalHandler = func(context.Context, string, json.RawMessage) (any, error) {
 		return map[string]any{"records": []any{}}, nil
 	}

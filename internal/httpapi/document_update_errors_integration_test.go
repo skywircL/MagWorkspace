@@ -219,7 +219,30 @@ func TestHTTPDocumentsUpdateAuthorizationAndRejectedBases(t *testing.T) {
 	x.request(t, "DELETE", path, owner.Token, nil, 204)
 	x.request(t, "PATCH", path, owner.Token, map[string]string{"title": "deleted"}, 404)
 	x.request(t, "PUT", path+"/content", owner.Token, map[string]string{"base_version_id": first.Version.ID, "content": "deleted"}, 404)
-	assertDocumentUpdateState(t, x, first, 1)
+	for _, deletedPath := range []string{path, path + "/versions", documentVersionPath(first.Document, first.Version), documentVersionPath(first.Document, first.Version) + "/content", indexJobPath(first)} {
+		x.request(t, "GET", deletedPath, owner.Token, nil, 404)
+	}
+	db, err := sql.Open("mysql", x.dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var documents, versions, indexes int
+	err = db.QueryRowContext(ctx, `SELECT
+		(SELECT COUNT(*) FROM documents WHERE id=?),
+		(SELECT COUNT(*) FROM document_versions WHERE document_id=?),
+		(SELECT COUNT(*) FROM document_indexes WHERE document_id=?)`, first.Document.ID, first.Document.ID, first.Document.ID).Scan(&documents, &versions, &indexes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if documents != 0 || versions != 0 || indexes != 0 {
+		t.Fatalf("deleted document retained or recreated owned rows after rejected updates: documents=%d versions=%d indexes=%d", documents, versions, indexes)
+	}
+	assertDocumentUpdateState(t, x, other, 1)
+	x.request(t, "GET", documentPath(other.Document), owner.Token, nil, 200)
+	assertDocumentDownload(t, x.integrationFixture, owner.Token, other.Document, other.Version, []byte("another document"))
 }
 
 func TestHTTPDocumentsTextUpdateObjectFailureDoesNotPublish(t *testing.T) {

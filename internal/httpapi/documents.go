@@ -147,7 +147,7 @@ func (s *server) documents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	data, total, err := s.db.Documents(r.Context(), userID(r), r.PathValue("workspaceID"), n, (p-1)*n)
+	data, total, err := s.db.DocumentsMatching(r.Context(), userID(r), r.PathValue("workspaceID"), r.URL.Query().Get("keyword"), n, (p-1)*n)
 	if err != nil {
 		fail(w, err)
 		return

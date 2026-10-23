@@ -119,6 +119,12 @@ main { min-width: 0; padding: 0 38px 28px; max-width: 1760px; width: 100%; margi
 #show-upload { padding: 10px 17px; font-size: 12px; white-space: nowrap; }
 #show-upload span { margin-right: 4px; }
 .knowledge-panel { background: #fff; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.knowledge-base-toolbar { display: flex; align-items: flex-start; gap: 20px; justify-content: space-between; padding: 20px 25px; border-bottom: 1px solid var(--border); background: #fbfcfb; }
+.knowledge-base-choice { flex: 1; min-width: 0; }
+.knowledge-base-choice label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 600; }
+.knowledge-base-choice select { width: 100%; max-width: 400px; }
+.knowledge-base-choice p { margin: 8px 0 0; font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.knowledge-base-actions { display: flex; gap: 7px; flex-wrap: wrap; padding-top: 24px; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; padding: 23px 25px 18px; }
 .heading-with-count { display: flex; align-items: center; gap: 9px; }
 .heading-with-count h2 { font-size: 14px; margin: 0; }
@@ -210,6 +216,40 @@ main { min-width: 0; padding: 0 38px 28px; max-width: 1760px; width: 100%; margi
 .welcome-hint { display: block; font-size: 10px; margin-top: 18px; color: #b1bdb4; }
 #chat-form { border: 1px solid #dae6dd; box-shadow: 0 2px 8px #2c634506; border-radius: 10px; margin: 12px 25px 24px; overflow: hidden; }
 #chat-form:focus-within { border-color: #96bda3; box-shadow: 0 0 0 3px #43895c08; }
+.chat-scope-bar { display: flex; align-items: flex-start; gap: 8px; padding: 12px 13px 0; }
+#chat-knowledge-scope { flex-shrink: 0; color: var(--green-dark); background: #f1f8f4; border-color: #deebe2; }
+.chat-scope-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; max-height: 78px; overflow-y: auto; }
+.chat-scope-chip { font-size: 11px; padding: 5px 8px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-color: #e3ebe6; }
+.chat-scope-chip.unavailable, .chat-scope-hint.scope-error { color: #a04430; }
+.chat-scope-hint { margin: 7px 13px 0; font-size: 11px; line-height: 1.6; color: #7c9081; }
+.chat-scope-dialog { width: min(560px, calc(100vw - 28px)); max-height: min(720px, calc(100dvh - 32px)); padding: 24px; }
+.chat-scope-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.chat-scope-heading .eyebrow { margin-bottom: 5px; }
+.chat-scope-dialog > .muted { font-size: 12px; line-height: 1.8; }
+.chat-scope-modes { display: flex; gap: 8px; border: 0; padding: 0; margin: 18px 0; flex-wrap: wrap; }
+.chat-scope-modes label { display: flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px; cursor: pointer; font-size: 12px; }
+.chat-scope-modes label:has(input:checked) { background: var(--green-soft); border-color: #97cbb5; color: var(--green-dark); }
+.chat-scope-modes input, .chat-scope-option input { width: 15px; height: 15px; margin: 0; accent-color: var(--green); flex-shrink: 0; }
+#chat-scope-search { width: 100%; font-size: 13px; }
+.chat-scope-options { max-height: min(300px, 36dvh); overflow-y: auto; margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.chat-scope-option { display: flex; align-items: center; gap: 12px; padding: 12px; cursor: pointer; }
+.chat-scope-option + .chat-scope-option { border-top: 1px solid #f0f3f1; }
+.chat-scope-option:has(input:checked) { background: #f4faf6; }
+.chat-scope-option span { min-width: 0; }
+.chat-scope-option strong, .chat-scope-option small { display: block; overflow-wrap: anywhere; }
+.chat-scope-option strong { font-size: 13px; font-weight: 500; }
+.chat-scope-option small { font-size: 11px; margin-top: 3px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chat-scope-summary { font-size: 12px; margin: 14px 0; color: #6b8173; }
+.chat-scope-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
+@media (max-width: 600px) {
+  .chat-scope-bar { flex-wrap: wrap; padding: 9px 10px 0; }
+  .chat-scope-hint { margin: 6px 10px 0; font-size: 10px; }
+  .chat-scope-chips { max-height: 58px; }
+  .chat-scope-chip { max-width: 150px; }
+  .chat-scope-dialog { padding: 18px; }
+  .chat-scope-modes { gap: 5px; }
+  .chat-scope-modes label { padding: 8px; font-size: 11px; }
+}
 #query { border: 0; border-radius: 0; padding: 16px 17px 5px; font-size: 12px; resize: vertical; min-height: 90px; max-height: 260px; outline: 0; display: block; }
 #query:focus-visible { outline: 0; }
 .composer-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 11px 13px; }
@@ -228,6 +268,7 @@ main { min-width: 0; padding: 0 38px 28px; max-width: 1760px; width: 100%; margi
 #run-state .card { margin-top: 12px; }
 .prompt { background: #fffcf4; border: 1px solid #eaddb5; padding: 20px; border-radius: 8px; margin: 20px 0; }
 .prompt p { font-size: 13px; }
+.approval-target { overflow-wrap: anywhere; }
 .prompt h2 { font-size: 15px; }
 .prompt > button { margin: 8px 8px 0 0; font-size: 12px; }
 .prompt > small { display: block; }
@@ -329,6 +370,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .comparison { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
+  .knowledge-base-toolbar { flex-direction: column; gap: 10px; padding: 18px; }
+  .knowledge-base-choice { width: 100%; }
+  .knowledge-base-choice select { max-width: none; }
+  .knowledge-base-actions { padding-top: 0; }
   .auth { grid-template-columns: 1fr; }
   .auth-story { padding: 25px 26px; min-height: auto; }
   .auth-story-content { padding: 29px 0 0; margin: 0; }
@@ -529,4 +574,25 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .memory-row { flex-direction: column; padding: 16px; }
   .memory-toolbar { padding: 14px 16px; gap: 8px; }
   .memory-panel .panel-heading { flex-wrap: wrap; }
+}
+
+/* Resource mentions share selection rules with the full scope dialog. */
+#chat-form { position: relative; overflow: visible; z-index: 2; }
+.chat-resource-tabs { display: flex; gap: 5px; margin-top: 10px; }
+.chat-resource-tabs button { border: 0; padding: 6px 14px; font-size: 12px; }
+.chat-resource-tabs button.active { color: var(--green-dark); background: var(--green-soft); }
+.chat-resource-pages { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.chat-resource-pages:empty { display: none; }
+.chat-resource-pages small { margin-left: auto; color: #6b8173; }
+.chat-mention-picker { position: absolute; z-index: 5; left: 0; bottom: calc(100% + 8px); width: min(480px, 100%); max-height: min(440px, 55dvh); overflow-y: auto; background: white; border: 1px solid #dce8e0; border-radius: 12px; padding: 12px; box-shadow: 0 12px 36px #153d2820; }
+.chat-mention-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; }
+.chat-mention-heading .icon-button { padding: 0 8px; }
+.chat-mention-picker .chat-scope-options { max-height: min(245px, 30dvh); margin-top: 8px; }
+.chat-mention-picker .chat-scope-option { width: 100%; border: 0; border-radius: 0; text-align: left; }
+.chat-mention-picker .chat-scope-option.active { background: var(--green-soft); box-shadow: inset 3px 0 var(--green); }
+.chat-mention-help { display: block; margin-top: 10px; color: #7c9081; font-size: 10px; }
+@media (max-width: 600px) {
+  .chat-mention-picker { max-height: 47dvh; padding: 10px; }
+  .chat-mention-picker .chat-scope-options { max-height: 23dvh; }
+  .chat-resource-pages { gap: 5px; }
 }

@@ -396,16 +396,42 @@ func (s *Store) DocumentIndexByID(ctx context.Context, userID, workspaceID, docu
 }
 
 func (s *Store) SearchIndexScope(ctx context.Context, userID, workspaceID, profileID string, documentIDs ...[]string) ([]string, error) {
+	return s.SearchIndexScopeInKnowledgeBase(ctx, userID, workspaceID, profileID, "", documentIDs...)
+}
+
+func (s *Store) SearchIndexScopeInKnowledgeBase(ctx context.Context, userID, workspaceID, profileID, knowledgeBaseID string, documentIDs ...[]string) ([]string, error) {
+	return s.SearchIndexScopeInKnowledgeBases(ctx, userID, workspaceID, profileID, singleKnowledgeBase(knowledgeBaseID), documentIDs...)
+}
+
+func (s *Store) SearchIndexScopeInKnowledgeBases(ctx context.Context, userID, workspaceID, profileID string, knowledgeBaseIDs []string, documentIDs ...[]string) ([]string, error) {
+	return s.searchIndexScopeScoped(ctx, userID, workspaceID, profileID, knowledgeBaseIDs, nil, documentIDs...)
+}
+
+func (s *Store) SearchIndexScopeForResources(ctx context.Context, userID, workspaceID, profileID string, scope domain.ResourceScope) ([]string, error) {
+	return s.searchIndexScopeScoped(ctx, userID, workspaceID, profileID, nil, &scope)
+}
+
+func (s *Store) searchIndexScopeScoped(ctx context.Context, userID, workspaceID, profileID string, knowledgeBaseIDs []string, resources *domain.ResourceScope, documentIDs ...[]string) ([]string, error) {
 	result := []string{}
 	if !validProfileID(profileID) {
 		return result, domain.ErrInvalid
 	}
-	filter, scopeArgs, scopeErr := documentScopeFilter(documentIDs)
+	filter, scopeArgs, scopeErr := indexKnowledgeBasesScopeFilter(knowledgeBaseIDs, documentIDs)
+	if resources != nil {
+		filter, scopeArgs, scopeErr = resourceScopeFilter(*resources)
+	}
 	if scopeErr != nil {
 		return result, scopeErr
 	}
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if _, err := lockWorkspace(ctx, tx, userID, workspaceID); err != nil {
+			return err
+		}
+		if resources != nil {
+			if err := checkResourceScopeTx(ctx, tx, workspaceID, *resources); err != nil {
+				return err
+			}
+		} else if err := checkIndexKnowledgeBases(ctx, tx, workspaceID, knowledgeBaseIDs); err != nil {
 			return err
 		}
 		args := append([]any{workspaceID, profileID}, scopeArgs...)
@@ -433,16 +459,42 @@ func (s *Store) SearchIndexScope(ctx context.Context, userID, workspaceID, profi
 }
 
 func (s *Store) ResolveIndexes(ctx context.Context, userID, workspaceID, profileID string, ids []string, documentIDs ...[]string) ([]domain.IndexReference, error) {
+	return s.ResolveIndexesInKnowledgeBase(ctx, userID, workspaceID, profileID, "", ids, documentIDs...)
+}
+
+func (s *Store) ResolveIndexesInKnowledgeBase(ctx context.Context, userID, workspaceID, profileID, knowledgeBaseID string, ids []string, documentIDs ...[]string) ([]domain.IndexReference, error) {
+	return s.ResolveIndexesInKnowledgeBases(ctx, userID, workspaceID, profileID, singleKnowledgeBase(knowledgeBaseID), ids, documentIDs...)
+}
+
+func (s *Store) ResolveIndexesInKnowledgeBases(ctx context.Context, userID, workspaceID, profileID string, knowledgeBaseIDs []string, ids []string, documentIDs ...[]string) ([]domain.IndexReference, error) {
+	return s.resolveIndexesScoped(ctx, userID, workspaceID, profileID, knowledgeBaseIDs, ids, nil, documentIDs...)
+}
+
+func (s *Store) ResolveIndexesForResources(ctx context.Context, userID, workspaceID, profileID string, ids []string, scope domain.ResourceScope) ([]domain.IndexReference, error) {
+	return s.resolveIndexesScoped(ctx, userID, workspaceID, profileID, nil, ids, &scope)
+}
+
+func (s *Store) resolveIndexesScoped(ctx context.Context, userID, workspaceID, profileID string, knowledgeBaseIDs []string, ids []string, resources *domain.ResourceScope, documentIDs ...[]string) ([]domain.IndexReference, error) {
 	result := []domain.IndexReference{}
 	if !validProfileID(profileID) || len(ids) > 200 {
 		return result, domain.ErrInvalid
 	}
-	filter, scopeArgs, scopeErr := documentScopeFilter(documentIDs)
+	filter, scopeArgs, scopeErr := indexKnowledgeBasesScopeFilter(knowledgeBaseIDs, documentIDs)
+	if resources != nil {
+		filter, scopeArgs, scopeErr = resourceScopeFilter(*resources)
+	}
 	if scopeErr != nil {
 		return result, scopeErr
 	}
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if _, err := lockWorkspace(ctx, tx, userID, workspaceID); err != nil {
+			return err
+		}
+		if resources != nil {
+			if err := checkResourceScopeTx(ctx, tx, workspaceID, *resources); err != nil {
+				return err
+			}
+		} else if err := checkIndexKnowledgeBases(ctx, tx, workspaceID, knowledgeBaseIDs); err != nil {
 			return err
 		}
 		// Treat external IDs only as hints. Invalid, duplicate, foreign and stale

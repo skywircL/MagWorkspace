@@ -257,6 +257,10 @@ func TestHTTPHarnessServiceToolsMemoryPromptsAndApproval(t *testing.T) {
 	var calls atomic.Int32
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		payload := harnessHTTPModelInput(t, r)
+		if queryUnderstandingRequest(payload) {
+			harnessHTTPModelReply(w, payload, "not-json", "", "")
+			return
+		}
 		step := calls.Add(1)
 		visible, _ := json.Marshal(payload.Messages)
 		if strings.Contains(string(visible), harnessHTTPTestKey) || strings.Contains(string(visible), "127.0.0.1") {

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const output = path.join(root, "artifacts/acceptance/030/webui-regression");
+const output = process.env.MAGWORKSPACE_WEBUI_TEST_OUTPUT || path.join(root, "artifacts/acceptance/030/webui-regression");
 const assets = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
@@ -18,6 +18,8 @@ const csp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-sr
 const timestamp = "2026-10-17T08:00:00Z";
 const maliciousTitle = '<img src=x onerror="window.__injected=1">.md';
 const maliciousBody = '<script>window.__injected=2</script>\n<img src=x onerror="window.__injected=3">';
+const approvalKnowledgeBaseID = "b".repeat(32);
+const approvalKnowledgeBaseName = '旅行资料 <img src=x onerror="window.__injected=7">';
 const durableAnswer = "这是从持久消息重新读取的答案。\n" + maliciousBody;
 const evidenceID = "a".repeat(32);
 const sourceText = "知识准备、服务部署、数据处理、结果验证。演示建议：单机 2 核 6 GB；三台虚拟机各 1 核 4 GB。此处为合成验收资料。";
@@ -56,6 +58,7 @@ let server;
 let origin;
 let rejectAuthentication = false;
 let delayedBody;
+let approvalDestinationMode = "update";
 
 function delayNextBody(route, status = 200) {
   let release;
@@ -95,6 +98,19 @@ async function readJSON(request) {
   return body ? JSON.parse(body) : {};
 }
 function prompt(sessionID, runID) {
+  if (approvalDestinationMode !== "update") {
+    const targetID = approvalDestinationMode === "explicit" ? approvalKnowledgeBaseID
+      : approvalDestinationMode === "unknown" ? "f".repeat(32) : "";
+    return {
+      id: "approval", kind: "tool_approval", run_id: runID, session_id: sessionID,
+      question: "请审阅新文档的目标知识库和完整正文。", status: "pending", expires_at: "2099-01-01T00:00:00Z",
+      approval: { tool: "create_document", title: "旅行摘要", filename: "summary.md",
+        content_bytes: Buffer.byteLength(maliciousBody), ...(targetID ? { knowledge_base_id: targetID } : {}),
+        arguments: { title: "旅行摘要", filename: "summary.md", content: maliciousBody,
+          ...(targetID ? { knowledge_base_id: targetID } : {}) },
+      },
+    };
+  }
   return {
     id: "approval", kind: "tool_approval", run_id: runID, session_id: sessionID,
     question: "请审阅这次文档更新。", status: "pending", expires_at: "2099-01-01T00:00:00Z",
@@ -181,14 +197,18 @@ async function handle(request, response) {
   const match = /^\/api\/v1\/workspaces\/(owner|viewer)(.*)$/.exec(route);
   if (match) {
     const [, workspace, suffix] = match;
-    if (suffix === "/documents" && method === "GET") {
+    if (suffix === "/knowledge-bases" && method === "GET") {
+      json(response, [{ id: "default", workspace_id: workspace, name: "默认知识库", description: "", is_default: true },
+        { id: approvalKnowledgeBaseID, workspace_id: workspace, name: approvalKnowledgeBaseName, description: "", is_default: false }]); return;
+    }
+    if (suffix === "/knowledge-bases/default/documents" && method === "GET") {
       const items = workspace === "owner" ? documents : documents.slice(0, 1);
       const page = Number(url.searchParams.get("page") || 1), pageSize = Number(url.searchParams.get("page_size") || 10);
       if (await sendDelayedBody(response, route, "application/json", JSON.stringify({ success: true,
         data: items.slice((page - 1) * pageSize, page * pageSize), total: items.length, page, page_size: pageSize }))) return;
       list(response, items, url); return;
     }
-    if (suffix === "/search" && method === "POST") {
+    if (suffix === "/knowledge-bases/default/search" && method === "POST") {
       const body = await readJSON(request);
       assert.equal(body.query, "资料依据");
       assert.equal(body.mode, "hybrid");
@@ -598,6 +618,39 @@ try {
     assert.equal(await page.locator("#send").isDisabled(), true);
     assert.equal(requests.filter((entry) => entry.path.endsWith("/messages")).at(-1).query, "?page=2&page_size=20");
   });
+  for (const mode of ["explicit", "unknown", "default"]) {
+    await check(`create approval displays ${mode} destination independently of selected library`, async () => {
+      approvalDestinationMode = mode;
+      await page.locator("#refresh-chat").click(); await idle(page);
+      assert.equal(await page.locator("#knowledge-base").inputValue(), "default");
+      const target = await page.locator("#prompt .approval-target").textContent();
+      if (mode === "explicit") {
+        assert.ok(target.includes(approvalKnowledgeBaseName));
+        assert.ok(target.includes(approvalKnowledgeBaseID));
+        assert.ok(!target.includes("默认知识库"));
+      } else if (mode === "unknown") {
+        assert.ok(target.includes("名称暂不可用"));
+        assert.ok(target.includes("f".repeat(32)));
+        assert.ok(!target.includes("默认知识库"));
+      } else {
+        assert.equal(target, "目标知识库：执行时的默认知识库（未指定固定知识库 ID）。");
+        assert.ok(!target.includes(approvalKnowledgeBaseID));
+      }
+      assert.equal(await page.locator("#prompt img, #prompt script").count(), 0);
+      assert.equal(await page.evaluate(() => window.__injected), undefined);
+      assert.equal(await page.getByRole("button", { name: "批准这次写入", exact: true }).isEnabled(), true);
+      assert.equal(requests.filter((entry) => entry.path.endsWith("/approve")).length, 0);
+      await noOverflow(page);
+      if (mode === "explicit") {
+        await screenshot(page, "desktop-create-approval.png");
+        await page.setViewportSize({ width: 390, height: 844 });
+        await noOverflow(page); await screenshot(page, "mobile-create-approval.png");
+        await page.setViewportSize({ width: 1440, height: 1024 });
+      }
+      approvalDestinationMode = "update";
+      await page.locator("#refresh-chat").click(); await idle(page);
+    });
+  }
   await check("full session page and composer remain reachable on laptop height", async () => {
     for (let index = 0; index < 10; index++) {
       const session = { id: `additional-${index}`, title: `知识整理会话 ${index + 1}` };
@@ -645,10 +698,10 @@ try {
       second.setDefaultTimeout(8000);
       second.on("pageerror", (error) => pageErrors.push(error.message));
       await second.goto(origin); await second.locator("#shell").waitFor({ state: "visible" }); await idle(second);
-      let route = "/api/v1/workspaces/owner/documents";
+      let route = "/api/v1/workspaces/owner/knowledge-bases/default/documents";
       if (kind !== "json") {
         await page.locator("#documents .document-title").last().click(); await idle(page);
-        route += "/literal/versions/v-literal/content";
+        route = "/api/v1/workspaces/owner/documents/literal/versions/v-literal/content";
       }
       const release = delayNextBody(route, kind === "401" ? 401 : 200);
       try {

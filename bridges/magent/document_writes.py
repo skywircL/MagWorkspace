@@ -11,16 +11,16 @@ def tools(backend):
     from magent_harness.policy import Risk
     from magent_harness.messages import ToolResult
     from retrieval import RetrievalError
-    from workspace_tools import WorkspaceTools
+    from workspace_tools import WorkspaceTools, knowledge_base_id
 
     string = {"type": "string"}
     definitions = (
         (
             "create_document",
             "Create a new TXT or Markdown document after the user approves its "
-            "exact title, filename and full content. Content is limited to 32768 "
+            "exact title, filename and full content, plus knowledge_base_id when specified. Omit knowledge_base_id to use the default library at execution time. Content is limited to 32768 "
             "UTF-8 bytes. Only available with unrestricted workspace document scope.",
-            {"title": string, "filename": string, "content": string},
+            {"title": string, "filename": string, "content": string, "knowledge_base_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"}},
         ),
         (
             "update_document",
@@ -38,6 +38,11 @@ def tools(backend):
         async def execute(ctx, args):
             if len(args["content"].encode("utf-8")) > 32768:
                 return ToolResult.fail("document content exceeds 32768 UTF-8 bytes")
+            if "knowledge_base_id" in args:
+                try:
+                    knowledge_base_id(args["knowledge_base_id"])
+                except ValueError:
+                    return ToolResult.fail("invalid knowledge base ID")
             try:
                 result = await backend.call(name, args, tool_call_id=ctx.tool_call_id)
                 if not isinstance(result, dict):
@@ -45,6 +50,8 @@ def tools(backend):
                 # Match read tools' model-visible metadata: no caller IDs, object
                 # paths or workspace authority fields in the model transcript.
                 visible = WorkspaceTools._metadata(ctx, result)
+                if "knowledge_base_id" in args and visible["document"].get("knowledge_base_id") != args["knowledge_base_id"]:
+                    raise ValueError("write receipt changed knowledge base")
                 return ToolResult.ok(
                     json.dumps(visible, ensure_ascii=False),
                     data={"document_write": visible},
@@ -72,7 +79,7 @@ def tools(backend):
             ToolSpec(
                 name,
                 description,
-                {"type": "object", "properties": props, "required": list(props), "additionalProperties": False},
+                {"type": "object", "properties": props, "required": [key for key in props if key != "knowledge_base_id"], "additionalProperties": False},
                 risk=Risk.WRITE,
                 always_confirm=True,
             ),

@@ -106,15 +106,46 @@ func (s *Store) RunDocumentScope(ctx context.Context, userID, workspaceID, sessi
 	return result, err
 }
 
-// runSourcesValidTx includes the flattened provenance inherited from model
-// history. Neither an absent citation nor a later tool-free paraphrase removes
-// the original document's access boundary. Historical document heads are valid.
-func runSourcesValidTx(ctx context.Context, tx *sql.Tx, workspaceID, runID string, documentIDs []string) (bool, error) {
-	allowed, err := runConversationSourcesValidTx(ctx, tx, workspaceID, runID, documentIDs)
+// runSourcesValidTx retains the legacy call shape for existing run lifecycle
+// consumers. Without explicit dimensions the persisted canonical scope wins.
+func runSourcesValidTx(ctx context.Context, tx *sql.Tx, workspaceID, runID string, documentIDs []string, knowledgeBaseSelections ...[]string) (bool, error) {
+	if len(knowledgeBaseSelections) > 1 {
+		return false, domain.ErrInvalid
+	}
+	var scope domain.ResourceScope
+	var err error
+	if len(knowledgeBaseSelections) == 1 {
+		scope, err = legacyResourceScopeTx(ctx, tx, workspaceID, documentIDs, knowledgeBaseSelections[0])
+	} else {
+		scope, err = runResourceScopeTx(ctx, tx, workspaceID, runID)
+	}
+	if errors.Is(err, sql.ErrNoRows) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return runSourcesValidInScopeTx(ctx, tx, workspaceID, runID, scope)
+}
+
+// Sources include flattened history and recalled conversations. Checking their
+// actual document/library relationship preserves each mixed target's boundary.
+func runSourcesValidInScopeTx(ctx context.Context, tx *sql.Tx, workspaceID, runID string, scope domain.ResourceScope) (bool, error) {
+	if err := checkResourceScopeTx(ctx, tx, workspaceID, scope); err != nil {
+		if errors.Is(err, sql.ErrNoRows) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
+			return false, nil
+		}
+		return false, err
+	}
+	allowed, err := runConversationSourcesValidTx(ctx, tx, workspaceID, runID, nil)
 	if err != nil || !allowed {
 		return false, err
 	}
-	filter, scopeArgs, err := documentScopeFilter([][]string{documentIDs})
+	allowed, err = runKnowledgeBaseSourcesValidTx(ctx, tx, workspaceID, runID, scope)
+	if err != nil || !allowed {
+		return false, err
+	}
+	filter, scopeArgs, err := resourceScopeFilter(scope)
 	if err != nil {
 		return false, err
 	}
@@ -138,7 +169,16 @@ func runSourcesValidTx(ctx context.Context, tx *sql.Tx, workspaceID, runID strin
 // CanHydrateRunHistory checks acquired and inherited sources, not merely the
 // sources the model chose to cite. A narrower scope or deleted source drops the
 // whole source-derived turn, including tool-free paraphrases in later turns.
-func (s *Store) CanHydrateRunHistory(ctx context.Context, userID, workspaceID, sessionID, runID string, documentIDs []string) (bool, error) {
+func (s *Store) CanHydrateRunHistory(ctx context.Context, userID, workspaceID, sessionID, runID string, documentIDs []string, knowledgeBaseSelections ...[]string) (bool, error) {
+	if len(knowledgeBaseSelections) > 1 {
+		return false, domain.ErrInvalid
+	}
+	// This API evaluates a previous run for a new request. An omitted selection
+	// means that request has no extra KB restriction, not the previous run's.
+	var knowledgeBaseIDs []string
+	if len(knowledgeBaseSelections) == 1 {
+		knowledgeBaseIDs = knowledgeBaseSelections[0]
+	}
 	allowed := false
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, false); err != nil {
@@ -152,7 +192,34 @@ func (s *Store) CanHydrateRunHistory(ctx context.Context, userID, workspaceID, s
 			return domain.ErrInvalid
 		}
 		var err error
-		allowed, err = runSourcesValidTx(ctx, tx, workspaceID, runID, documentIDs)
+		allowed, err = runSourcesValidTx(ctx, tx, workspaceID, runID, documentIDs, knowledgeBaseIDs)
+		return err
+	})
+	return allowed, err
+}
+
+// CanHydrateRunHistoryForRun evaluates a completed turn against the immutable
+// resource selection of the new run, including mixed whole-library/doc targets.
+func (s *Store) CanHydrateRunHistoryForRun(ctx context.Context, userID, workspaceID, sessionID, sourceRunID, targetRunID string) (bool, error) {
+	allowed := false
+	err := s.transaction(ctx, func(tx *sql.Tx) error {
+		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, targetRunID, true); err != nil {
+			return err
+		}
+		// The target authorization already locks this private session. Match the
+		// source within that session without applying the target generation to it.
+		var status string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id=? AND session_id=?`, sourceRunID, sessionID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "completed" {
+			return domain.ErrInvalid
+		}
+		scope, err := runResourceScopeTx(ctx, tx, workspaceID, targetRunID)
+		if err != nil {
+			return err
+		}
+		allowed, err = runSourcesValidInScopeTx(ctx, tx, workspaceID, sourceRunID, scope)
 		return err
 	})
 	return allowed, err
@@ -175,7 +242,7 @@ func (s *Store) BindRunHistory(ctx context.Context, userID, workspaceID, session
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, true); err != nil {
 			return err
 		}
-		scope, err := runDocumentScopeTx(ctx, tx, runID)
+		scope, err := runResourceScopeTx(ctx, tx, workspaceID, runID)
 		if err != nil {
 			return err
 		}
@@ -208,7 +275,7 @@ func (s *Store) BindRunHistory(ctx context.Context, userID, workspaceID, session
 			seen[id] = true
 			var status string
 			var acquired bool
-			if err = tx.QueryRowContext(ctx, `SELECT r.status,(EXISTS(SELECT 1 FROM run_evidence e WHERE e.run_id=r.id) OR EXISTS(SELECT 1 FROM run_document_sources d WHERE d.run_id=r.id)) FROM runs r WHERE r.id=? AND r.session_id=? FOR UPDATE`, id, sessionID).Scan(&status, &acquired); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT r.status,(EXISTS(SELECT 1 FROM run_evidence e WHERE e.run_id=r.id) OR EXISTS(SELECT 1 FROM run_document_sources d WHERE d.run_id=r.id) OR EXISTS(SELECT 1 FROM run_knowledge_base_sources k WHERE k.run_id=r.id)) FROM runs r WHERE r.id=? AND r.session_id=? FOR UPDATE`, id, sessionID).Scan(&status, &acquired); err != nil {
 				return err
 			}
 			if status != "completed" {
@@ -231,13 +298,13 @@ func (s *Store) BindRunHistory(ctx context.Context, userID, workspaceID, session
 			// Flattened rows remain metadata only and must themselves be completed
 			// runs from this private session with actual acquired source evidence.
 			var valid bool
-			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs r WHERE r.id=? AND r.session_id=? AND r.status='completed' AND (EXISTS(SELECT 1 FROM run_evidence e WHERE e.run_id=r.id) OR EXISTS(SELECT 1 FROM run_document_sources d WHERE d.run_id=r.id)))`, source, sessionID).Scan(&valid); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs r WHERE r.id=? AND r.session_id=? AND r.status='completed' AND (EXISTS(SELECT 1 FROM run_evidence e WHERE e.run_id=r.id) OR EXISTS(SELECT 1 FROM run_document_sources d WHERE d.run_id=r.id) OR EXISTS(SELECT 1 FROM run_knowledge_base_sources k WHERE k.run_id=r.id)))`, source, sessionID).Scan(&valid); err != nil {
 				return err
 			}
 			if !valid || source == runID {
 				return domain.ErrInvalid
 			}
-			allowed, err := runSourcesValidTx(ctx, tx, workspaceID, source, scope)
+			allowed, err := runSourcesValidInScopeTx(ctx, tx, workspaceID, source, scope)
 			if err != nil {
 				return err
 			}
@@ -251,7 +318,7 @@ func (s *Store) BindRunHistory(ctx context.Context, userID, workspaceID, session
 		if err = bindConversationHistoryTx(ctx, tx, runID, historyRunIDs); err != nil {
 			return err
 		}
-		allowed, err := runSourcesValidTx(ctx, tx, workspaceID, runID, scope)
+		allowed, err := runSourcesValidInScopeTx(ctx, tx, workspaceID, runID, scope)
 		if err != nil {
 			return err
 		}
@@ -274,18 +341,18 @@ func sameEvidenceChunk(e domain.Evidence, chunk domain.IndexChunk, generation st
 // generation and immutable content are checked again at acquisition. Evidence
 // stores a stable reference; chunk plaintext remains in the chunks table.
 func (s *Store) RecordRunEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit) ([]domain.Evidence, error) {
-	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, false)
+	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, false, nil)
 }
 
 // RecordRunDocumentEvidence also accepts an immutable index already pinned by
 // this run, so reading adjacent passages cannot silently switch document heads.
 func (s *Store) RecordRunDocumentEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit) ([]domain.Evidence, error) {
-	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, true)
+	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, true, nil)
 }
 
-func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit, allowPinned bool) ([]domain.Evidence, error) {
+func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit, allowPinned bool, knowledgeBaseIDs []string) ([]domain.Evidence, error) {
 	result := []domain.Evidence{}
-	if len(hits) > maxRunEvidence {
+	if len(hits) > maxRunEvidence || domain.ValidateKnowledgeBaseIDs(knowledgeBaseIDs) != nil {
 		return result, domain.ErrInvalid
 	}
 	for _, hit := range hits {
@@ -297,13 +364,9 @@ func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sess
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, true); err != nil {
 			return err
 		}
-		scope, err := runDocumentScopeTx(ctx, tx, runID)
+		scope, err := resolveRunResourceScopeTx(ctx, tx, workspaceID, runID, knowledgeBaseIDs)
 		if err != nil {
 			return err
-		}
-		allowed := make(map[string]bool, len(scope))
-		for _, id := range scope {
-			allowed[id] = true
 		}
 		var count int
 		if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_evidence WHERE run_id=?`, runID).Scan(&count); err != nil {
@@ -312,14 +375,14 @@ func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sess
 		seen := make(map[string]bool, len(hits))
 		for _, hit := range hits {
 			chunk := hit.Chunk
-			if scope != nil && !allowed[chunk.DocumentID] {
-				return domain.ErrForbidden
-			}
-			var generation, title string
+			var generation, title, knowledgeBaseID string
 			var chunkCount, parentCount int
-			err = tx.QueryRowContext(ctx, `SELECT i.generation,d.title,i.chunk_count,i.parent_count FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id JOIN document_versions v ON v.id=i.version_id AND v.document_id=i.document_id AND v.sha256=i.source_sha256 WHERE i.id=? AND i.workspace_id=? AND i.document_id=? AND i.version_id=? AND i.source_sha256=? AND i.status='ready' AND d.deleted_at IS NULL AND (d.current_version_id=i.version_id OR (? AND (EXISTS(SELECT 1 FROM run_document_sources ds WHERE ds.run_id=? AND ds.document_id=d.id AND ds.version_id=i.version_id AND ds.source_sha256=i.source_sha256 AND ds.index_id=i.id AND ds.generation=i.generation) OR EXISTS(SELECT 1 FROM run_evidence re WHERE re.run_id=? AND re.document_id=d.id AND re.version_id=i.version_id AND re.source_sha256=i.source_sha256 AND re.index_id=i.id AND re.generation=i.generation))))`, chunk.IndexID, workspaceID, chunk.DocumentID, chunk.VersionID, chunk.SourceSHA256, allowPinned, runID, runID).Scan(&generation, &title, &chunkCount, &parentCount)
+			err = tx.QueryRowContext(ctx, `SELECT i.generation,d.title,i.chunk_count,i.parent_count,d.knowledge_base_id FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id JOIN document_versions v ON v.id=i.version_id AND v.document_id=i.document_id AND v.sha256=i.source_sha256 WHERE i.id=? AND i.workspace_id=? AND i.document_id=? AND i.version_id=? AND i.source_sha256=? AND i.status='ready' AND d.deleted_at IS NULL AND (d.current_version_id=i.version_id OR (? AND (EXISTS(SELECT 1 FROM run_document_sources ds WHERE ds.run_id=? AND ds.document_id=d.id AND ds.version_id=i.version_id AND ds.source_sha256=i.source_sha256 AND ds.index_id=i.id AND ds.generation=i.generation) OR EXISTS(SELECT 1 FROM run_evidence re WHERE re.run_id=? AND re.document_id=d.id AND re.version_id=i.version_id AND re.source_sha256=i.source_sha256 AND re.index_id=i.id AND re.generation=i.generation))))`, chunk.IndexID, workspaceID, chunk.DocumentID, chunk.VersionID, chunk.SourceSHA256, allowPinned, runID, runID).Scan(&generation, &title, &chunkCount, &parentCount, &knowledgeBaseID)
 			if err != nil {
 				return err
+			}
+			if !scope.AllowsDocument(knowledgeBaseID, chunk.DocumentID) {
+				return domain.ErrForbidden
 			}
 			if chunk.Kind == "parent" {
 				chunkCount = parentCount
@@ -380,6 +443,9 @@ func (s *Store) recordRunEvidence(ctx context.Context, userID, workspaceID, sess
 // resolves the exact version acquired by its run, while deletion or revocation
 // still makes it inaccessible. Generation/source changes invalidate it.
 func evidenceSourceValidTx(ctx context.Context, tx *sql.Tx, e domain.Evidence) error {
+	if err := runAllowsDocumentTx(ctx, tx, e.WorkspaceID, e.RunID, e.DocumentID); err != nil {
+		return dbError(err)
+	}
 	var valid bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM documents d JOIN document_versions v ON v.document_id=d.id AND v.id=? AND v.sha256=? JOIN document_indexes i ON i.id=? AND i.document_id=d.id AND i.workspace_id=d.workspace_id AND i.version_id=v.id AND i.source_sha256=v.sha256 AND i.generation=? AND i.status='ready' JOIN chunks c ON c.index_id=i.id AND c.generation=i.generation AND c.id=? AND c.sha256=? AND c.start_byte=? AND c.end_byte=? WHERE d.id=? AND d.workspace_id=? AND d.deleted_at IS NULL)`, e.VersionID, e.SourceSHA256, e.IndexID, e.Generation, e.ChunkID, e.SHA256, e.StartByte, e.EndByte, e.DocumentID, e.WorkspaceID).Scan(&valid)
 	if err != nil {
@@ -440,7 +506,7 @@ func (s *Store) EvidenceForRun(ctx context.Context, userID, workspaceID, session
 			return err
 		}
 		for _, e := range all {
-			if err = evidenceSourceValidTx(ctx, tx, e); errors.Is(err, domain.ErrNotFound) {
+			if err = evidenceSourceValidTx(ctx, tx, e); errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
 				continue
 			} else if err != nil {
 				return err
@@ -464,4 +530,10 @@ func citeEvidenceTx(ctx context.Context, tx *sql.Tx, workspaceID, runID string, 
 		}
 	}
 	return nil
+}
+
+// Bind evidence to the selected libraries in the final authorization transaction,
+// even when search produced no hits. Tool selections only narrow the Run scope.
+func (s *Store) RecordRunKnowledgeEvidence(ctx context.Context, userID, workspaceID, sessionID, runID string, hits []domain.SearchHit, knowledgeBaseIDs []string) ([]domain.Evidence, error) {
+	return s.recordRunEvidence(ctx, userID, workspaceID, sessionID, runID, hits, false, knowledgeBaseIDs)
 }

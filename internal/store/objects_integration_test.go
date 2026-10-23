@@ -317,12 +317,11 @@ func TestMySQLObjectsCleanupSurvivesRestartAndWorkspaceDeletion(t *testing.T) {
 	u, w := testUser(t, s, "objectcleanup")
 	objects := newMemoryObjects()
 	s.SetObjectStorage(objects)
-	write, err := s.CreateDocument(ctx, u.ID, w.ID, "Soft delete", "source.txt", []byte("retained"))
+	_, err := s.CreateDocument(ctx, u.ID, w.ID, "Live document", "source.txt", []byte("retained"))
 	must(t, err)
-	must(t, s.DeleteDocument(ctx, u.ID, w.ID, write.Document.ID))
 	must(t, s.CleanupObjects(ctx))
 	if objects.count() != 1 {
-		t.Fatal("soft delete reclaimed immutable source")
+		t.Fatal("cleanup reclaimed a referenced source")
 	}
 	// A completed upload without its final transaction models a killed request.
 	documentID, err := newID()
@@ -346,7 +345,7 @@ func TestMySQLObjectsCleanupSurvivesRestartAndWorkspaceDeletion(t *testing.T) {
 	must(t, err)
 	must(t, reopened.CleanupObjects(ctx))
 	if objects.count() != 1 {
-		t.Fatal("restart did not recover orphan without touching soft-deleted source")
+		t.Fatal("restart did not recover orphan without touching live source")
 	}
 	must(t, reopened.DeleteWorkspace(ctx, u.ID, w.ID))
 	assertObjectQueueCount(t, reopened, 1)

@@ -23,4 +23,6 @@ done
 export MAGWORKSPACE_TEST_DATABASE_URL="root:${MYSQL_ROOT_PASSWORD}@tcp(127.0.0.1:${port})/mysql?parseTime=true"
 export GOMODCACHE="${GOMODCACHE:-$PWD/.cache/gomod}"
 export GOCACHE="${GOCACHE:-$PWD/.cache/gobuild}"
-go test -race -count=1 "$@" ./...
+# The real Harness/HTTP suite exceeds Go's default 10-minute package timeout.
+# A caller may still override this test-only budget with a later -timeout flag.
+go test -race -count=1 -timeout 20m "$@" ./...

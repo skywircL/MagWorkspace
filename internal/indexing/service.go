@@ -408,7 +408,7 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 	return result.Hits, err
 }
 
-func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, mode string, limit int, documentIDs []string, rerank bool, diagnostic *reranking.Diagnostics) (results []domain.SearchHit, resultErr error) {
+func (s *Service) searchScoped(ctx context.Context, userID, workspaceID string, knowledgeBaseIDs []string, query, mode string, limit int, documentIDs []string, rerank bool, diagnostic *reranking.Diagnostics, resources *domain.ResourceScope) (results []domain.SearchHit, resultErr error) {
 	ctx, finish := s.opts.Telemetry.Start(ctx, "retrieval.search")
 	started := time.Now()
 	defer func() {
@@ -426,7 +426,13 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 	// Authorization precedes external calls; final hydration repeats it so a
 	// revoked member or changed current version cannot use a stale search scope.
 	scopeCtx, finishScope := s.opts.Telemetry.Start(ctx, "retrieval.scope")
-	generations, err := s.db.SearchIndexScope(scopeCtx, userID, workspaceID, s.profile.ID, documentIDs)
+	var generations []string
+	var err error
+	if resources != nil {
+		generations, err = s.db.SearchIndexScopeForResources(scopeCtx, userID, workspaceID, s.profile.ID, *resources)
+	} else {
+		generations, err = s.db.SearchIndexScopeInKnowledgeBases(scopeCtx, userID, workspaceID, s.profile.ID, knowledgeBaseIDs, documentIDs)
+	}
 	finishScope(err)
 	if err != nil {
 		return nil, err
@@ -482,7 +488,12 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 		ids = append(ids, c.IndexID)
 	}
 	resolveCtx, finishResolve := s.opts.Telemetry.Start(ctx, "retrieval.resolve")
-	refs, err := s.db.ResolveIndexes(resolveCtx, userID, workspaceID, s.profile.ID, ids, documentIDs)
+	var refs []domain.IndexReference
+	if resources != nil {
+		refs, err = s.db.ResolveIndexesForResources(resolveCtx, userID, workspaceID, s.profile.ID, ids, *resources)
+	} else {
+		refs, err = s.db.ResolveIndexesInKnowledgeBases(resolveCtx, userID, workspaceID, s.profile.ID, knowledgeBaseIDs, ids, documentIDs)
+	}
 	finishResolve(err)
 	if err != nil {
 		return nil, err
@@ -497,7 +508,12 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 		hints = append(hints, c)
 	}
 	hydrateCtx, finishHydrate := s.opts.Telemetry.Start(ctx, "retrieval.hydrate")
-	hits, err := s.db.ResolveIndexChunks(hydrateCtx, userID, workspaceID, s.profile.ID, hints, documentIDs)
+	var hits []domain.SearchHit
+	if resources != nil {
+		hits, err = s.db.ResolveIndexChunksForResources(hydrateCtx, userID, workspaceID, s.profile.ID, hints, *resources)
+	} else {
+		hits, err = s.db.ResolveIndexChunksInKnowledgeBases(hydrateCtx, userID, workspaceID, s.profile.ID, knowledgeBaseIDs, hints, documentIDs)
+	}
 	finishHydrate(err)
 	if err != nil {
 		return nil, err
@@ -509,17 +525,23 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID, query, 
 	s.opts.Telemetry.ObserveCount("retrieval.hydrate", "success", len(hits))
 	// Recheck before sending trusted passages to the model, then again after
 	// the external call (including a successful empty result or model fallback).
-	hits, err = s.currentHits(ctx, userID, workspaceID, ids, documentIDs, published, hits)
+	hits, err = s.currentHits(ctx, userID, workspaceID, knowledgeBaseIDs, ids, documentIDs, published, hits, resources)
 	if err != nil {
 		return nil, err
 	}
 	sortRetrievalHits(hits)
 	if rerank {
-		hits, err = s.rerankHits(ctx, query, hits, headers, limit, len(documentIDs) > 0, diagnostic)
+		scopedDocuments := len(documentIDs) > 0
+		if resources != nil {
+			for _, target := range resources.Targets {
+				scopedDocuments = scopedDocuments || len(target.DocumentIDs) > 0
+			}
+		}
+		hits, err = s.rerankHits(ctx, query, hits, headers, limit, scopedDocuments, diagnostic)
 		if err != nil {
 			return nil, err
 		}
-		hits, err = s.currentHits(ctx, userID, workspaceID, ids, documentIDs, published, hits)
+		hits, err = s.currentHits(ctx, userID, workspaceID, knowledgeBaseIDs, ids, documentIDs, published, hits, resources)
 		if err != nil {
 			return nil, err
 		}

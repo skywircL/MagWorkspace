@@ -32,13 +32,13 @@ func TestHarnessWorkspaceQuestionsSuspendResumeAndRepeat(t *testing.T) {
 		t.Run(fmt.Sprint(stream), func(t *testing.T) {
 			req := retrievalRequest()
 			var restored atomic.Int32
-			req.ToolHandler = func(_ context.Context, name string, args json.RawMessage) (any, error) {
+			req.ToolHandler = testToolCapabilities(func(_ context.Context, name string, args json.RawMessage) (any, error) {
 				if name != "restore_evidence" || string(args) != "{}" {
 					t.Errorf("unexpected callback %s %s", name, args)
 				}
 				restored.Add(1)
 				return map[string]any{"evidence": []any{}}, nil
-			}
+			})
 			var steps atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
@@ -56,7 +56,7 @@ func TestHarnessWorkspaceQuestionsSuspendResumeAndRepeat(t *testing.T) {
 				for _, tool := range payload.Tools {
 					got[tool.Function.Name] = true
 				}
-				if len(got) != 7 || !got["create_document"] || !got["update_document"] || !got["ask_user"] || !got["search_knowledge"] || !got["read_document"] || !got["list_documents"] || !got["search_conversations"] {
+				if len(got) != 8 || !got["list_knowledge_bases"] || !got["create_document"] || !got["update_document"] || !got["ask_user"] || !got["search_knowledge"] || !got["read_document"] || !got["list_documents"] || !got["search_conversations"] {
 					t.Errorf("unexpected model tools %v", got)
 				}
 				n := steps.Add(1)
@@ -119,9 +119,9 @@ func TestHarnessWorkspaceQuestionsSuspendResumeAndRepeat(t *testing.T) {
 
 func TestHarnessWorkspaceResumeRejectsScopeIdentityAndWritePolicy(t *testing.T) {
 	req := retrievalRequest()
-	req.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+	req.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 		return map[string]any{"evidence": []any{}}, nil
-	}
+	})
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
@@ -182,7 +182,7 @@ func TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence(t *testing.T) {
 				}
 			}
 			var toolCount atomic.Int32
-			req.ToolHandler = func(_ context.Context, name string, args json.RawMessage) (any, error) {
+			req.ToolHandler = testToolCapabilities(func(_ context.Context, name string, args json.RawMessage) (any, error) {
 				toolCount.Add(1)
 				switch name {
 				case "search_knowledge":
@@ -201,7 +201,7 @@ func TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence(t *testing.T) {
 					t.Errorf("unexpected tool %s", name)
 					return nil, errors.New("bad tool")
 				}
-			}
+			})
 			var steps atomic.Int32
 			names := []string{"search_knowledge", "read_document", "list_documents", "search_conversations"}
 			args := []string{`{"query":"住宿标准","mode":"keyword"}`, `{"evidence_id":"` + strings.Repeat("5", 32) + `","context":1}`, `{"keyword":"制度","limit":10}`, `{"query":"配置"}`}
@@ -253,14 +253,14 @@ func TestHarnessWorkspaceReadToolsRegisterVerifiedEvidence(t *testing.T) {
 func TestHarnessWorkspaceResumeRestoresCitationRegistry(t *testing.T) {
 	req := retrievalRequest()
 	var restored atomic.Int32
-	req.ToolHandler = func(_ context.Context, name string, _ json.RawMessage) (any, error) {
+	req.ToolHandler = testToolCapabilities(func(_ context.Context, name string, _ json.RawMessage) (any, error) {
 		if name == "restore_evidence" {
 			restored.Add(1)
 		} else if name != "search_knowledge" {
 			t.Errorf("unexpected tool %s", name)
 		}
 		return map[string]any{"evidence": []any{evidenceForTest(req)}}, nil
-	}
+	})
 	var steps atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := steps.Add(1)
@@ -291,9 +291,9 @@ func TestHarnessWorkspaceResumeRestoresCitationRegistry(t *testing.T) {
 
 func TestHarnessWorkspaceStreamCanSuspendAgainBeforeModelCall(t *testing.T) {
 	req := retrievalRequest()
-	req.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+	req.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 		return map[string]any{"evidence": []any{}}, nil
-	}
+	})
 	var steps atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if steps.Add(1) == 1 {
@@ -360,10 +360,10 @@ for name,args in invalid:
 print(json.dumps({"run_id":r["run_id"],"session_id":r["session_id"],"status":"completed","answer":"ok","mode":"demo","messages":[{"role":"user","content":r["query"]},{"role":"assistant","content":"ok"}]}))
 `
 	req := retrievalRequest()
-	req.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+	req.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 		t.Error("unsafe input reached authenticated handler")
 		return nil, nil
-	}
+	})
 	result, err := mustClient(t, fakeScriptConfig(t, script)).Run(context.Background(), req)
 	if err != nil || result.Answer != "ok" {
 		t.Fatalf("closed tool boundary %+v %v", result, err)

@@ -66,11 +66,15 @@ func TestHTTPWorkspaceRealHarnessToolsSuspendRestartResumeCitation(t *testing.T)
 			fail("decode real Harness provider request: %v", err)
 			return
 		}
+		if len(payload.Messages) > 0 && strings.Contains(payload.Messages[0].Content, "MagWorkspace query understanding") {
+			fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"not-json"},"finish_reason":"stop"}]}`)
+			return
+		}
 		advertised := map[string]bool{}
 		for _, tool := range payload.Tools {
 			advertised[tool.Function.Name] = true
 		}
-		if len(advertised) != len(names)+3 || !advertised["search_memory"] || !advertised["create_document"] || !advertised["update_document"] {
+		if len(advertised) != len(names)+3 || !advertised["list_knowledge_bases"] || !advertised["search_memory"] || advertised["create_document"] || !advertised["update_document"] {
 			fail("model received unexpected tool set: %v", advertised)
 			return
 		}

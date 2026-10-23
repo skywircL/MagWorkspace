@@ -41,8 +41,17 @@ func TestHTTPContextRealHarnessCommittedCompactionSurvivesRestart(t *testing.T) 
 					t.Error(err)
 					return
 				}
+				if len(payload.Messages) > 0 && strings.Contains(payload.Messages[0].Content, "MagWorkspace query understanding") {
+					// A successful private plan must survive compaction/recovery
+					// without replacing the user's current request.
+					fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"{\"rewrite_query\":\"CURRENT_REQUEST_KEEP_EXACT\",\"intent\":\"follow_up\"}"},"finish_reason":"stop"}]}`)
+					return
+				}
 				if len(payload.Messages) > 0 && strings.Contains(payload.Messages[0].Content, "structured checkpoint") {
 					summaries.Add(1)
+					if strings.Contains(payload.Messages[len(payload.Messages)-1].Content, "original_query_sha256") {
+						t.Error("private query plan entered summary model input")
+					}
 					if payload.Stream || payload.MaxTokens <= 0 || payload.MaxTokens > 256 {
 						t.Error("private checkpoint ignored deployment summary budget")
 					}

@@ -43,6 +43,9 @@ func (s *Store) CreateUser(ctx context.Context, name, email, passwordHash string
 		}
 		w.Role = "owner"
 		_, err := tx.ExecContext(ctx, `INSERT INTO workspace_members(workspace_id,user_id,role) VALUES(?,?,'owner')`, w.ID, u.ID)
+		if err == nil {
+			_, err = createKnowledgeBaseTx(ctx, tx, u.ID, w.ID, "默认知识库", "")
+		}
 		return err
 	})
 	return u, w, err

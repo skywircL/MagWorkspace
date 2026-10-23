@@ -23,7 +23,7 @@ func TestHarnessToolPipelineParallelOrdering(t *testing.T) {
 			eight := make(chan struct{})
 			others := make(chan struct{})
 			req := retrievalRequest()
-			req.ToolHandler = func(ctx context.Context, name string, raw json.RawMessage) (any, error) {
+			req.ToolHandler = testToolCapabilities(func(ctx context.Context, name string, raw json.RawMessage) (any, error) {
 				if name != "list_documents" {
 					return nil, fmt.Errorf("unexpected tool")
 				}
@@ -58,7 +58,7 @@ func TestHarnessToolPipelineParallelOrdering(t *testing.T) {
 					close(others)
 				}
 				return map[string]any{"documents": []any{}, "offset": args.Offset}, nil
-			}
+			})
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var payload struct {
 					Messages []struct {

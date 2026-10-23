@@ -232,3 +232,14 @@ class RemoteRunStore:
         if not messages or messages[-1]["role"] != "user" or messages[-1]["content"] != state["query"]:
             return []
         return copy_json(messages[:-1])
+
+    def initial_messages(self):
+        """Authenticated original context, including private routing metadata.
+
+        Unlike citation history, this includes imported prompt snapshots. The
+        initial record survives context compaction; never infer routing from a
+        later model summary or generate a new plan while recovering.
+        """
+        if not self._records or self._records[0]["kind"] != "created":
+            return []
+        return copy_json(self._records[0]["data"]["state"]["messages"])

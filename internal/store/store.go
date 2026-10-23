@@ -22,7 +22,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql", "migrations/016_agent_state_content.sql"}
+var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql", "migrations/016_agent_state_content.sql", "migrations/017_knowledge_bases.sql", "migrations/018_document_deletion.sql", "migrations/019_memory_capture_outbox.sql", "migrations/020_knowledge_base_sources.sql", "migrations/021_run_knowledge_base_scopes.sql", "migrations/022_run_search_targets.sql"}
 
 type Store struct {
 	pool           *sql.DB
@@ -133,15 +133,43 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		for _, statement := range strings.Split(string(content), ";") {
-			if strings.TrimSpace(statement) == "" {
-				continue
+		if next == 18 {
+			// This data-only retirement must atomically retain external cleanup
+			// intents and remove their sources, including its version marker.
+			tx, err := conn.BeginTx(ctx, nil)
+			if err != nil {
+				return err
 			}
-			if _, err = conn.ExecContext(ctx, statement); err != nil {
+			if err = executeMigrationStatements(ctx, tx, content); err == nil {
+				_, err = tx.ExecContext(ctx, `INSERT INTO schema_version(singleton,version) VALUES(1,?) ON DUPLICATE KEY UPDATE version=?`, next, next)
+			}
+			if err != nil {
+				tx.Rollback()
 				return fmt.Errorf("migration %03d: %w", next, err)
 			}
+			if err = tx.Commit(); err != nil {
+				return fmt.Errorf("migration %03d: %w", next, err)
+			}
+			continue
+		}
+		if err = executeMigrationStatements(ctx, conn, content); err != nil {
+			return fmt.Errorf("migration %03d: %w", next, err)
 		}
 		if _, err = conn.ExecContext(ctx, `INSERT INTO schema_version(singleton,version) VALUES(1,?) ON DUPLICATE KEY UPDATE version=?`, next, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func executeMigrationStatements(ctx context.Context, target interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, content []byte) error {
+	for _, statement := range strings.Split(string(content), ";") {
+		if strings.TrimSpace(statement) == "" {
+			continue
+		}
+		if _, err := target.ExecContext(ctx, statement); err != nil {
 			return err
 		}
 	}

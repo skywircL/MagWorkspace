@@ -83,6 +83,10 @@
             <button id="show-upload" class="primary"><span aria-hidden="true">＋</span> 上传文档</button>
           </div>
           <div class="knowledge-panel">
+            <div class="knowledge-base-toolbar">
+              <div class="knowledge-base-choice"><label for="knowledge-base">当前知识库</label><select id="knowledge-base" disabled><option value="">读取知识库中…</option></select><p id="knowledge-base-description" class="muted"></p></div>
+              <div class="knowledge-base-actions"><button id="new-knowledge-base" class="small quiet" hidden>新建知识库</button><button id="edit-knowledge-base" class="small quiet" disabled hidden>编辑知识库</button><button id="delete-knowledge-base" class="small quiet danger" disabled hidden>删除知识库</button></div>
+            </div>
             <div class="panel-heading"><div class="heading-with-count"><h2 id="doc-list-heading">全部文档</h2><span id="doc-total" class="count">0</span></div><button id="refresh-docs" class="small quiet"><span aria-hidden="true">↻</span> 刷新</button></div>
             <form id="search-form" class="search-toolbar">
               <div class="search-input"><span aria-hidden="true">⌕</span><input name="query" aria-label="检索知识库" placeholder="搜索文档中的内容…" required /><button id="clear-search" type="button" class="icon-button" aria-label="清除检索" hidden>×</button></div>
@@ -95,7 +99,7 @@
             <div id="documents" class="cards"></div>
             <div id="doc-pages" class="pager"></div>
           </div>
-          <p class="section-note"><span aria-hidden="true">◇</span> 文档在当前工作空间内共享，每次内容更新都会保留独立版本。</p>
+          <p class="section-note"><span aria-hidden="true">◇</span> 此页仅查看当前知识库。文档在空间内共享；Agent 会话可检索当前工作空间的全部知识库。</p>
         </section>
         <section id="memory-view" aria-label="个人记忆" hidden>
           <div class="knowledge-panel memory-panel">
@@ -122,7 +126,7 @@
                   <div class="welcome-mark" aria-hidden="true">✦</div>
                   <p class="eyebrow">THINK WITH YOUR KNOWLEDGE</p>
                   <h2>你的知识，随时对话。</h2>
-                  <p>从一个问题开始。Agent 会查找当前空间的资料，<br class="desktop-break" />帮你整理思路，并让答案回到具体来源。</p>
+                  <p>从一个问题开始，选择这次对话可用的知识库。<br class="desktop-break" />让 Agent 帮你整理思路，让答案回到具体来源。</p>
                   <div class="suggestions"><button type="button" data-suggestion="请概览当前知识库中的文档，并总结主要主题。"><span aria-hidden="true">▤</span><strong>了解知识库</strong><small>概览资料与主要主题</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button><button type="button" data-suggestion="请帮我从知识库中查找与我的问题相关的资料，并说明来源。"><span aria-hidden="true">⌕</span><strong>寻找资料依据</strong><small>从文档中发现线索</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button><button type="button" data-suggestion="请帮我梳理现有资料中的关键要点，并整理成一份笔记草稿。"><span aria-hidden="true">✎</span><strong>整理知识笔记</strong><small>把关键信息串联起来</small><span class="suggestion-arrow" aria-hidden="true">↗</span></button></div>
                   <small class="welcome-hint">选择或新建会话，即可开始。</small>
                 </div>
@@ -134,7 +138,15 @@
               </div>
               <div class="conversation-jump"><button id="jump-latest" type="button" hidden>↓ 回到最新消息</button></div>
               <form id="chat-form">
-                <label for="query" class="sr-only">发送消息</label><textarea id="query" rows="2" maxlength="64000" placeholder="向你的知识库提问，或请 Agent 帮你整理资料…" required></textarea>
+                <div id="chat-mention-picker" class="chat-mention-picker" hidden>
+                  <div class="chat-mention-heading"><strong>@ 选择资料</strong><button id="chat-mention-close" type="button" class="icon-button" aria-label="关闭资料选择">×</button></div>
+                  <div id="chat-mention-tabs" class="chat-resource-tabs" role="tablist" aria-label="资料类型"><button type="button" role="tab" data-kind="knowledge_base" aria-selected="true">知识库</button><button type="button" role="tab" data-kind="document" aria-selected="false">文档</button></div>
+                  <div id="chat-mention-options" class="chat-scope-options" role="listbox" aria-label="可选择的资料"></div><div id="chat-mention-pages" class="chat-resource-pages"></div>
+                  <small class="chat-mention-help">继续输入以搜索 · ↑ ↓ 选择 · Enter 确认 · Esc 关闭</small>
+                </div>
+                <div class="chat-scope-bar"><button id="chat-knowledge-scope" type="button" class="small" aria-haspopup="dialog" aria-controls="chat-scope-dialog" disabled>▤ 全部知识库</button><div id="chat-scope-chips" class="chat-scope-chips" aria-label="下次提问的资料范围"></div></div>
+                <p id="chat-scope-hint" class="chat-scope-hint">下次提问可使用当前空间的全部知识库。</p>
+                <label for="query" class="sr-only">发送消息</label><textarea id="query" aria-haspopup="listbox" aria-controls="chat-mention-options" aria-expanded="false" rows="2" maxlength="64000" placeholder="向你的知识库提问，或请 Agent 帮你整理资料…" required></textarea>
                 <div class="composer-bottom"><small id="composer-hint">Ctrl / ⌘ + Enter 发送 · Enter 换行</small><div><button id="stop" type="button" hidden>停止生成</button><button class="primary" id="send">发送 <span aria-hidden="true">↑</span></button></div></div>
               </form>
             </div>
@@ -142,9 +154,18 @@
         </section>
       </main>
     </div>
+    <dialog id="chat-scope-dialog" class="chat-scope-dialog" aria-labelledby="chat-scope-title" aria-describedby="chat-scope-description">
+      <div class="chat-scope-heading"><div><p class="eyebrow">KNOWLEDGE SCOPE</p><h2 id="chat-scope-title">选择知识库与文档</h2></div><button id="chat-scope-cancel" type="button" class="icon-button" aria-label="取消选择资料">×</button></div>
+      <p id="chat-scope-description" class="muted">设置下次提问可使用的资料范围。发送后，本次运行及其后续确认都沿用这个范围。</p>
+      <fieldset class="chat-scope-modes"><legend class="sr-only">知识库范围</legend><label><input type="radio" name="chat-scope-mode" value="all" />全部知识库</label><label><input type="radio" name="chat-scope-mode" value="selected" />指定资料</label><label><input type="radio" name="chat-scope-mode" value="none" />不使用知识库</label></fieldset>
+      <div id="chat-scope-picker"><label for="chat-scope-search" class="sr-only">搜索知识库或文档</label><input id="chat-scope-search" type="search" placeholder="搜索知识库名称或文档标题…" autocomplete="off" /><div id="chat-scope-tabs" class="chat-resource-tabs" role="tablist" aria-label="资料类型"><button type="button" role="tab" data-kind="knowledge_base" aria-selected="true">知识库</button><button type="button" role="tab" data-kind="document" aria-selected="false">文档</button></div><div id="chat-scope-options" class="chat-scope-options"></div><div id="chat-scope-pages" class="chat-resource-pages"></div></div>
+      <p id="chat-scope-summary" class="chat-scope-summary" role="status"></p>
+      <div class="chat-scope-footer"><button id="chat-scope-refresh" type="button" class="quiet small">刷新列表</button><button id="chat-scope-apply" type="button" class="primary">应用范围</button></div>
+    </dialog>
     <dialog id="upload-dialog" class="upload-dialog" aria-labelledby="upload-title">
       <div class="dialog-heading"><div><p class="eyebrow">BUILD YOUR KNOWLEDGE</p><h2 id="upload-title">上传文档</h2></div><button id="close-upload" type="button" class="icon-button" aria-label="关闭上传">×</button></div>
       <p class="muted">添加一份资料，开始连接你的知识。上传后会自动解析并建立索引。</p>
+      <p id="upload-knowledge-base" class="muted"></p>
       <form id="upload-form">
         <label>文档标题 <span class="muted">（可选）</span><input name="title" placeholder="默认使用文件名" /></label>
         <label class="upload-drop"><span class="upload-symbol" aria-hidden="true">↑</span><strong>选择要上传的文档</strong><small>TXT、Markdown、PDF 或 Word 文档</small><input name="file" type="file" required accept=".txt,.md,.markdown,.pdf,.docx" /></label>

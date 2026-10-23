@@ -201,10 +201,10 @@ func TestMySQLDocumentAuthorizationAndRevocation(t *testing.T) {
 	wantError(t, err, domain.ErrForbidden)
 }
 
-func TestMySQLDocumentSoftDeleteAndWorkspaceCascade(t *testing.T) {
+func TestMySQLDocumentDeleteAndWorkspaceCascade(t *testing.T) {
 	s, _ := testStore(t)
 	ctx := context.Background()
-	u, w := testUser(t, s, "softdelete")
+	u, w := testUser(t, s, "documentdelete")
 	first, err := s.CreateDocument(ctx, u.ID, w.ID, "Retained history", "one.txt", []byte("retained"))
 	must(t, err)
 	second, err := s.AppendDocumentVersion(ctx, u.ID, w.ID, first.Document.ID, first.Version.ID, "two.txt", []byte("also retained"))
@@ -215,14 +215,16 @@ func TestMySQLDocumentSoftDeleteAndWorkspaceCascade(t *testing.T) {
 	documents, total, err := s.Documents(ctx, u.ID, w.ID, 20, 0)
 	must(t, err)
 	if total != 0 || len(documents) != 0 {
-		t.Fatalf("soft-deleted document remained listed: %+v", documents)
+		t.Fatalf("deleted document remained listed: %+v", documents)
 	}
 	var count int
-	var retained []byte
 	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM document_versions WHERE document_id=?`, first.Document.ID).Scan(&count))
-	must(t, s.pool.QueryRowContext(ctx, `SELECT content FROM document_versions WHERE id=?`, first.Version.ID).Scan(&retained))
-	if count != 2 || string(retained) != "retained" {
-		t.Fatal("soft delete physically removed immutable history")
+	if count != 0 {
+		t.Fatal("document deletion retained source versions")
+	}
+	must(t, s.pool.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents WHERE id=?`, first.Document.ID).Scan(&count))
+	if count != 0 {
+		t.Fatal("document deletion retained metadata")
 	}
 	_, err = s.CreateDocument(ctx, u.ID, w.ID, "Live document", "live.txt", nil)
 	must(t, err)

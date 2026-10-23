@@ -91,7 +91,7 @@ func (s *server) retrievalTools(uid, wid, sid, rid string) agent.ToolHandler {
 		defer func() { finish(err) }()
 		// This closure is the only identity source. Model arguments cannot select
 		// a caller, workspace, session or run.
-		scope, err := s.db.RunDocumentScope(ctx, uid, wid, sid, rid)
+		scope, err := s.db.RunResourceScope(ctx, uid, wid, sid, rid, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +113,7 @@ func (s *server) retrievalTools(uid, wid, sid, rid string) agent.ToolHandler {
 				return nil, &agent.ToolError{Code: code}
 			}
 			return result, nil
-		case "search_knowledge", "read_document", "list_documents":
+		case "tool_capabilities", "list_knowledge_bases", "search_knowledge", "read_document", "list_documents":
 			return s.knowledgeTool(ctx, uid, wid, sid, rid, name, raw)
 		case "search_conversations":
 			var in struct {
@@ -182,7 +182,7 @@ func (s *server) retrievalTools(uid, wid, sid, rid string) agent.ToolHandler {
 			if in.Limit == 0 {
 				in.Limit = 5
 			}
-			hits, err := s.cfg.Indexing.SearchScoped(ctx, uid, wid, in.Query, in.Mode, in.Limit, scope)
+			hits, err := s.cfg.Indexing.SearchResourcesScoped(ctx, uid, wid, in.Query, in.Mode, in.Limit, scope)
 			if err != nil {
 				return nil, err
 			}
@@ -324,7 +324,7 @@ func (s *server) runCitations(w http.ResponseWriter, r *http.Request) {
 // A previous cited answer is source-derived data too. Do not feed it back to
 // the model when its evidence is deleted, revoked or outside this turn's scope.
 // Durable user-visible history remains intact; only model hydration is reduced.
-func (s *server) retrievalHistory(ctx context.Context, uid, wid, sid string, history []domain.Message, selected []string) ([]agent.Message, []string, error) {
+func (s *server) retrievalHistory(ctx context.Context, uid, wid, sid, targetRunID string, history []domain.Message) ([]agent.Message, []string, error) {
 	// BeginRun hydrates at most 100 completed turns. Recheck every candidate's
 	// provenance before the model window is selected, without a hidden 20-turn cut.
 	filtered := make([]domain.Message, 0, len(history))
@@ -337,7 +337,7 @@ func (s *server) retrievalHistory(ctx context.Context, uid, wid, sid string, his
 		if err != nil {
 			continue
 		}
-		valid, err := s.db.CanHydrateRunHistory(ctx, uid, wid, sid, answer.RunID, selected)
+		valid, err := s.db.CanHydrateRunHistoryForRun(ctx, uid, wid, sid, answer.RunID, targetRunID)
 		if err != nil {
 			return nil, nil, err
 		}

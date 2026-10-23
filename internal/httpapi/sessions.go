@@ -95,8 +95,9 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Content     string    `json:"content"`
-		DocumentIDs *[]string `json:"document_ids"`
+		Content          string    `json:"content"`
+		DocumentIDs      *[]string `json:"document_ids"`
+		KnowledgeBaseIDs *[]string `json:"knowledge_base_ids"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -134,7 +135,11 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 	if in.DocumentIDs != nil {
 		selected = append([]string{}, (*in.DocumentIDs)...)
 	}
-	run, history, role, err := s.db.BeginRun(ctx, uid, wid, sid, in.Content, s.cfg.RunTimeout+5*time.Second, selected)
+	var knowledgeBases []string
+	if in.KnowledgeBaseIDs != nil {
+		knowledgeBases = append([]string{}, (*in.KnowledgeBaseIDs)...)
+	}
+	run, history, role, err := s.db.BeginRunWithResources(ctx, uid, wid, sid, in.Content, s.cfg.RunTimeout+5*time.Second, domain.ResourceSelection{DocumentIDs: selected, KnowledgeBaseIDs: knowledgeBases})
 	if err != nil {
 		fail(w, err)
 		return
@@ -142,7 +147,7 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Run-ID", run.ID)
 	request := agent.Request{RunID: run.ID, SessionID: sid, WorkspaceID: wid, UserID: uid, Role: role, HistoryWindowed: true, Query: in.Content}
 	var historyRuns []string
-	request.History, historyRuns, err = s.retrievalHistory(ctx, uid, wid, sid, history, selected)
+	request.History, historyRuns, err = s.retrievalHistory(ctx, uid, wid, sid, run.ID, history)
 	if err == nil {
 		err = s.db.BindRunHistory(ctx, uid, wid, sid, run.ID, historyRuns)
 	}
@@ -151,7 +156,17 @@ func (s *server) chat(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	request.DocumentIDs = in.DocumentIDs
+	// Preserve the additional native bound where a flat document set is exact.
+	// Mixed whole-library targets remain enforced by the Go-owned callbacks.
+	projection, err := s.db.RunDocumentScope(ctx, uid, wid, sid, run.ID)
+	if err != nil {
+		s.failRun(uid, wid, sid, run.ID, "scope_unavailable")
+		fail(w, err)
+		return
+	}
+	if projection != nil {
+		request.DocumentIDs = &projection
+	}
 	request.ToolHandler = s.retrievalTools(uid, wid, sid, run.ID)
 	ctx, err = s.bindRunJournal(ctx, &request)
 	if err != nil {

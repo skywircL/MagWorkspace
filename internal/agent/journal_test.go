@@ -157,12 +157,12 @@ func TestHarnessJournalTerminalRecoveryUsesCommittedAnswer(t *testing.T) {
 		t.Fatal("run facts were not committed")
 	}
 	request.Recover = true
-	request.ToolHandler = func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
+	request.ToolHandler = testToolCapabilities(func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
 		if tool != "restore_evidence" {
 			t.Fatalf("unexpected tool during recovery: %s", tool)
 		}
 		return map[string]any{"evidence": []any{}}, nil
-	}
+	})
 	recovered, err := client.Run(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -225,12 +225,12 @@ func TestHarnessJournalQuestionRecoveryAfterCommittedAnswer(t *testing.T) {
 				}
 				return result, err
 			}
-			request.ToolHandler = func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
 				if tool != "restore_evidence" {
 					t.Errorf("unexpected tool: %s", tool)
 				}
 				return map[string]any{"evidence": []any{}}, nil
-			}
+			})
 			var calls atomic.Int32
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
@@ -366,12 +366,12 @@ func TestHarnessJournalRecoverUnpublishedSecondQuestion(t *testing.T) {
 				}
 				return result, err
 			}
-			request.ToolHandler = func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(_ context.Context, tool string, _ json.RawMessage) (any, error) {
 				if tool != "restore_evidence" {
 					t.Errorf("unexpected tool %s", tool)
 				}
 				return map[string]any{"evidence": []any{}}, nil
-			}
+			})
 			var calls atomic.Int32
 			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)

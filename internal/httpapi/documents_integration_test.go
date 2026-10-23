@@ -435,7 +435,7 @@ func TestHTTPDocumentsSoftDeleteHidesAllVersions(t *testing.T) {
 	f.request(t, http.MethodDelete, documentPath(first.Document), owner.Token, nil, http.StatusNotFound)
 	list := f.request(t, http.MethodGet, base, owner.Token, nil, http.StatusOK)
 	if list.Total != 0 || len(integrationData[[]domain.Document](t, list)) != 0 {
-		t.Fatalf("soft-deleted document remains visible in listing: %+v", list)
+		t.Fatalf("deleted document remains visible in listing: %+v", list)
 	}
 	f.restart(t)
 	f.request(t, http.MethodGet, documentPath(first.Document), owner.Token, nil, http.StatusNotFound)

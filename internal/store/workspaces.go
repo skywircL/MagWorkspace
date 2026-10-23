@@ -33,6 +33,9 @@ func (s *Store) CreateWorkspace(ctx context.Context, userID, name, description s
 			return e
 		}
 		_, e = tx.ExecContext(ctx, `INSERT INTO workspace_members(workspace_id,user_id,role) VALUES(?,?,'owner')`, id, userID)
+		if e == nil {
+			_, e = createKnowledgeBaseTx(ctx, tx, userID, id, "默认知识库", "")
+		}
 		return e
 	})
 	return w, err

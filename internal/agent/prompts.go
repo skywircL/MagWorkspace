@@ -74,7 +74,7 @@ func validUserPrompt(prompt *UserPrompt, request Request) bool {
 			}
 		}
 	}
-	allowed := map[string]bool{"create_document": true, "update_document": true, "search_knowledge": true, "read_document": true, "list_documents": true, "search_conversations": true, "search_memory": true, "ask_user": true, "search_documents": true, "read_evidence": true}
+	allowed := map[string]bool{"create_document": true, "update_document": true, "search_knowledge": true, "read_document": true, "list_documents": true, "list_knowledge_bases": true, "search_conversations": true, "search_memory": true, "ask_user": true, "search_documents": true, "read_evidence": true}
 	for _, name := range snapshot.Policy.AllowedTools {
 		if !allowed[name] {
 			return false

@@ -15,14 +15,16 @@ import (
 const MaxAgentDocumentBytes = 32 << 10
 
 type DocumentMutation struct {
-	Title         string `json:"title,omitempty"`
-	Filename      string `json:"filename,omitempty"`
-	DocumentID    string `json:"document_id,omitempty"`
-	BaseVersionID string `json:"base_version_id,omitempty"`
-	Content       string `json:"content"`
+	KnowledgeBaseID string `json:"knowledge_base_id,omitempty"`
+	Title           string `json:"title,omitempty"`
+	Filename        string `json:"filename,omitempty"`
+	DocumentID      string `json:"document_id,omitempty"`
+	BaseVersionID   string `json:"base_version_id,omitempty"`
+	Content         string `json:"content"`
 }
 
 type DocumentApproval struct {
+	KnowledgeBaseID string          `json:"knowledge_base_id,omitempty"`
 	Tool            string          `json:"tool"`
 	Risk            string          `json:"risk"`
 	Description     string          `json:"description"`
@@ -47,9 +49,11 @@ func ParseDocumentMutation(tool string, raw []byte) (DocumentMutation, string, e
 		return out, "", ErrInvalid
 	}
 	wanted := map[string]bool{"content": true}
+	optional := map[string]bool{}
 	switch tool {
 	case "create_document":
 		wanted["title"], wanted["filename"] = true, true
+		optional["knowledge_base_id"] = true
 	case "update_document":
 		wanted["document_id"], wanted["base_version_id"] = true, true
 	default:
@@ -67,7 +71,7 @@ func ParseDocumentMutation(tool string, raw []byte) (DocumentMutation, string, e
 			return out, "", ErrInvalid
 		}
 		k, ok := key.(string)
-		if !ok || !wanted[k] {
+		if !ok || (!wanted[k] && !optional[k]) {
 			return out, "", ErrInvalid
 		}
 		if _, exists := fields[k]; exists {
@@ -83,10 +87,20 @@ func ParseDocumentMutation(tool string, raw []byte) (DocumentMutation, string, e
 		}
 		fields[k] = v
 	}
-	if t, err = d.Token(); err != nil || t != json.Delim('}') || d.Decode(new(any)) != io.EOF || len(fields) != len(wanted) {
+	if t, err = d.Token(); err != nil || t != json.Delim('}') || d.Decode(new(any)) != io.EOF {
 		return out, "", ErrInvalid
 	}
-	out = DocumentMutation{Title: fields["title"], Filename: fields["filename"], DocumentID: fields["document_id"], BaseVersionID: fields["base_version_id"], Content: fields["content"]}
+	for key := range wanted {
+		if _, ok := fields[key]; !ok {
+			return out, "", ErrInvalid
+		}
+	}
+	if id, ok := fields["knowledge_base_id"]; ok {
+		if err := ValidateKnowledgeBaseIDs([]string{id}); err != nil {
+			return out, "", err
+		}
+	}
+	out = DocumentMutation{KnowledgeBaseID: fields["knowledge_base_id"], Title: fields["title"], Filename: fields["filename"], DocumentID: fields["document_id"], BaseVersionID: fields["base_version_id"], Content: fields["content"]}
 	if len(out.Content) > MaxAgentDocumentBytes {
 		return out, "", ErrInvalid
 	}

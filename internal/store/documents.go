@@ -14,7 +14,7 @@ import (
 	"magworkspace/internal/domain"
 )
 
-const documentColumns = `id,workspace_id,title,current_version_id,created_by,created_at,updated_at`
+const documentColumns = `id,workspace_id,knowledge_base_id,title,current_version_id,created_by,created_at,updated_at`
 const documentVersionColumns = `id,document_id,version_number,filename,media_type,size_bytes,sha256,created_by,created_at,object_key`
 
 func validDocumentText(value string) bool {
@@ -40,7 +40,7 @@ func canWriteDocument(role string) bool {
 
 func scanDocument(row rowScanner) (domain.Document, error) {
 	var document domain.Document
-	err := row.Scan(&document.ID, &document.WorkspaceID, &document.Title, &document.CurrentVersionID, &document.CreatedBy, &document.CreatedAt, &document.UpdatedAt)
+	err := row.Scan(&document.ID, &document.WorkspaceID, &document.KnowledgeBaseID, &document.Title, &document.CurrentVersionID, &document.CreatedBy, &document.CreatedAt, &document.UpdatedAt)
 	return document, dbError(err)
 }
 
@@ -84,10 +84,25 @@ func (s *Store) CreateDocument(ctx context.Context, userID, workspaceID, title, 
 }
 
 func (s *Store) createDocument(ctx context.Context, userID, workspaceID, title, filename string, content []byte, gate *documentWriteGate) (domain.DocumentWrite, error) {
+	return s.createKnowledgeBaseDocument(ctx, userID, workspaceID, "", title, filename, content, gate)
+}
+
+func (s *Store) CreateKnowledgeBaseDocument(ctx context.Context, userID, workspaceID, knowledgeBaseID, title, filename string, content []byte) (domain.DocumentWrite, error) {
+	if knowledgeBaseID == "" {
+		return domain.DocumentWrite{}, domain.ErrInvalid
+	}
+	return s.createKnowledgeBaseDocument(ctx, userID, workspaceID, knowledgeBaseID, title, filename, content, nil)
+}
+
+func (s *Store) createKnowledgeBaseDocument(ctx context.Context, userID, workspaceID, knowledgeBaseID, title, filename string, content []byte, gate *documentWriteGate) (domain.DocumentWrite, error) {
 	var result domain.DocumentWrite
 	title = strings.TrimSpace(title)
 	if !validDocumentText(title) || !validDocumentFilename(filename) || !s.validUploadSize(len(content)) {
 		return result, domain.ErrInvalid
+	}
+	knowledgeBaseID, err := s.documentKnowledgeBase(ctx, userID, workspaceID, knowledgeBaseID)
+	if err != nil {
+		return result, err
 	}
 	documentID, err := newID()
 	if err != nil {
@@ -115,12 +130,15 @@ func (s *Store) createDocument(ctx context.Context, userID, workspaceID, title, 
 		if !canWriteDocument(role) {
 			return domain.ErrForbidden
 		}
+		if _, err = knowledgeBaseTx(ctx, tx, workspaceID, knowledgeBaseID); err != nil {
+			return err
+		}
 		if err = consumeDocumentObjectTx(ctx, tx, objectKey); err != nil {
 			return err
 		}
 		// The head is assigned with its first immutable version in this transaction.
 		// Avoid a cyclic FK: versions own the document FK; all head writes live here.
-		if _, err = tx.ExecContext(ctx, `INSERT INTO documents(id,workspace_id,title,current_version_id,created_by) VALUES(?,?,?,?,?)`, documentID, workspaceID, title, versionID, userID); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO documents(id,workspace_id,knowledge_base_id,title,current_version_id,created_by) VALUES(?,?,?,?,?,?)`, documentID, workspaceID, knowledgeBaseID, title, versionID, userID); err != nil {
 			return err
 		}
 		result.Version, err = insertDocumentVersion(ctx, tx, userID, documentID, versionID, 1, filename, content, objectKey)
@@ -213,19 +231,24 @@ func (s *Store) appendDocumentVersion(ctx context.Context, userID, workspaceID, 
 }
 
 func (s *Store) Documents(ctx context.Context, userID, workspaceID string, limit, offset int) ([]domain.Document, int, error) {
+	return s.DocumentsMatching(ctx, userID, workspaceID, "", limit, offset)
+}
+
+func (s *Store) DocumentsMatching(ctx context.Context, userID, workspaceID, keyword string, limit, offset int) ([]domain.Document, int, error) {
 	result := []domain.Document{}
 	total := 0
-	if !validPage(limit, offset) {
+	keyword = strings.TrimSpace(keyword)
+	if !validPage(limit, offset) || !utf8.ValidString(keyword) || len(keyword) > 256 {
 		return result, total, domain.ErrInvalid
 	}
 	err := s.transaction(ctx, func(tx *sql.Tx) error {
 		if _, err := lockWorkspace(ctx, tx, userID, workspaceID); err != nil {
 			return err
 		}
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents WHERE workspace_id=? AND deleted_at IS NULL`, workspaceID).Scan(&total); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM documents WHERE workspace_id=? AND deleted_at IS NULL AND LOCATE(?,title)>0`, workspaceID, keyword).Scan(&total); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents WHERE workspace_id=? AND deleted_at IS NULL ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?`, workspaceID, limit, offset)
+		rows, err := tx.QueryContext(ctx, `SELECT `+documentColumns+` FROM documents WHERE workspace_id=? AND deleted_at IS NULL AND LOCATE(?,title)>0 ORDER BY updated_at DESC,id DESC LIMIT ? OFFSET ?`, workspaceID, keyword, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -347,7 +370,13 @@ func (s *Store) DeleteDocument(ctx context.Context, userID, workspaceID, documen
 		if err = queueDocumentCleanupTx(ctx, tx, workspaceID, documentID); err != nil {
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `UPDATE documents SET deleted_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=? AND workspace_id=?`, documentID, workspaceID)
+		if err = queueDocumentObjectsTx(ctx, tx, workspaceID, documentID); err != nil {
+			return err
+		}
+		// Cleanup intents survive the cascade. Fixed source references in Run
+		// history remain as audit metadata and become invalid when their document
+		// is absent; deleting them would erase the history authorization boundary.
+		_, err = tx.ExecContext(ctx, `DELETE FROM documents WHERE id=? AND workspace_id=?`, documentID, workspaceID)
 		return err
 	})
 }

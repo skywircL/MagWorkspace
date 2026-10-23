@@ -33,7 +33,7 @@ func (s *Store) SearchRunConversations(ctx context.Context, userID, workspaceID,
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, true); err != nil {
 			return err
 		}
-		scope, err := runDocumentScopeTx(ctx, tx, runID)
+		scope, err := resolveRunResourceScopeTx(ctx, tx, workspaceID, runID, nil)
 		if err != nil {
 			return err
 		}
@@ -61,7 +61,7 @@ func (s *Store) SearchRunConversations(ctx context.Context, userID, workspaceID,
 		acquired := []string{}
 		visible := 0
 		for _, id := range candidates {
-			allowed, err := runSourcesValidTx(ctx, tx, workspaceID, id, scope)
+			allowed, err := runSourcesValidInScopeTx(ctx, tx, workspaceID, id, scope)
 			if err != nil {
 				return err
 			}
@@ -88,7 +88,7 @@ func (s *Store) SearchRunConversations(ctx context.Context, userID, workspaceID,
 		if err := bindConversationSearchTx(ctx, tx, runID, acquired); err != nil {
 			return err
 		}
-		allowed, err := runSourcesValidTx(ctx, tx, workspaceID, runID, scope)
+		allowed, err := runSourcesValidInScopeTx(ctx, tx, workspaceID, runID, scope)
 		if err != nil {
 			return err
 		}

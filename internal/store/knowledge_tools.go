@@ -70,12 +70,8 @@ func pinToolDocumentTx(ctx context.Context, tx *sql.Tx, workspaceID, runID strin
 		return err
 	}
 	if !exists {
-		var count int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_document_sources WHERE run_id=?`, runID).Scan(&count); err != nil {
+		if err := requireMetadataSourceCapacityTx(ctx, tx, runID); err != nil {
 			return err
-		}
-		if count >= maxRunHistorySources {
-			return domain.ErrInvalid
 		}
 	}
 	_, err := tx.ExecContext(ctx, `INSERT IGNORE INTO run_document_sources(run_id,workspace_id,document_id,version_id,source_sha256,index_id,generation) VALUES(?,?,?,?,?,?,?)`, runID, workspaceID, doc.Document.ID, doc.Version.ID, doc.Version.SHA256, indexID, generation)
@@ -88,20 +84,19 @@ func runIndexPinnedTx(ctx context.Context, tx *sql.Tx, runID string, job domain.
 	return pinned, err
 }
 
-func runAllowsDocumentTx(ctx context.Context, tx *sql.Tx, runID, documentID string) error {
-	scope, err := runDocumentScopeTx(ctx, tx, runID)
+func runAllowsDocumentTx(ctx context.Context, tx *sql.Tx, workspaceID, runID, documentID string) error {
+	scope, err := resolveRunResourceScopeTx(ctx, tx, workspaceID, runID, nil)
 	if err != nil {
 		return err
 	}
-	if scope == nil {
-		return nil
+	var knowledgeBaseID string
+	if err = tx.QueryRowContext(ctx, `SELECT knowledge_base_id FROM documents WHERE id=? AND workspace_id=? AND deleted_at IS NULL`, documentID, workspaceID).Scan(&knowledgeBaseID); err != nil {
+		return err
 	}
-	for _, id := range scope {
-		if id == documentID {
-			return nil
-		}
+	if !scope.AllowsDocument(knowledgeBaseID, documentID) {
+		return domain.ErrForbidden
 	}
-	return domain.ErrForbidden
+	return nil
 }
 
 // RunToolDocument pins a current source before remote I/O. Explicit historical
@@ -115,7 +110,7 @@ func (s *Store) RunToolDocument(ctx context.Context, userID, workspaceID, sessio
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, true); err != nil {
 			return err
 		}
-		if err := runAllowsDocumentTx(ctx, tx, runID, documentID); err != nil {
+		if err := runAllowsDocumentTx(ctx, tx, workspaceID, runID, documentID); err != nil {
 			return err
 		}
 		var err error
@@ -146,6 +141,10 @@ func (s *Store) RunToolDocument(ctx context.Context, userID, workspaceID, sessio
 // RunToolDocuments applies scope before filtering/pagination. Recording even
 // the lookahead row keeps the has_more observation within history provenance.
 func (s *Store) RunToolDocuments(ctx context.Context, userID, workspaceID, sessionID, runID, keyword, profileID string, offset, limit int) (ToolDocumentPage, error) {
+	return s.RunToolDocumentsInKnowledgeBases(ctx, userID, workspaceID, sessionID, runID, keyword, profileID, offset, limit, nil)
+}
+
+func (s *Store) RunToolDocumentsInKnowledgeBases(ctx context.Context, userID, workspaceID, sessionID, runID, keyword, profileID string, offset, limit int, knowledgeBaseIDs []string) (ToolDocumentPage, error) {
 	out := ToolDocumentPage{Documents: []ToolDocument{}, Offset: offset, Limit: limit}
 	keyword = strings.TrimSpace(keyword)
 	if !utf8.ValidString(keyword) || len(keyword) > 256 || offset < 0 || offset > 10000 || limit < 1 || limit > 20 || (profileID != "" && !validProfileID(profileID)) {
@@ -155,11 +154,11 @@ func (s *Store) RunToolDocuments(ctx context.Context, userID, workspaceID, sessi
 		if err := authorizeEvidenceRunTx(ctx, tx, userID, workspaceID, sessionID, runID, true); err != nil {
 			return err
 		}
-		scope, err := runDocumentScopeTx(ctx, tx, runID)
+		scope, err := resolveRunResourceScopeTx(ctx, tx, workspaceID, runID, knowledgeBaseIDs)
 		if err != nil {
 			return err
 		}
-		filter, args, err := documentScopeFilter([][]string{scope})
+		filter, args, err := resourceScopeFilter(scope)
 		if err != nil {
 			return err
 		}

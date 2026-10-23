@@ -77,12 +77,19 @@ func run() error {
 		err := redisClient.Ping(ctx)
 		stop()
 		if err != nil {
-			slog.Warn("Redis unavailable; durable indexing intents wait for queue recovery; event replay disabled until recovery")
+			slog.Warn("Redis unavailable; durable index and memory intents wait for queue recovery; event replay disabled until recovery")
 		}
 	}
 	indexConfig, err := configureIndexing()
 	if err != nil {
 		return err
+	}
+	memoryOptions, err := configureMemoryCapture()
+	if err != nil {
+		return err
+	}
+	if memoryOptions.Queue != nil {
+		defer memoryOptions.Queue.Close()
 	}
 	var profiles []domain.IndexProfile
 	if indexConfig != nil {
@@ -136,7 +143,8 @@ func run() error {
 	}
 	memoryDone := make(chan struct{})
 	extractor, _ := client.(agent.MemoryExtractor)
-	memories := memorycapture.NewService(db, extractor, memorycapture.Options{Redis: redisClient, Telemetry: telemetry})
+	memoryOptions.Telemetry = telemetry
+	memories := memorycapture.NewService(db, extractor, memoryOptions)
 	go func() { defer close(memoryDone); memories.Run(workerCtx) }()
 	objectsDone := make(chan struct{})
 	go func() {

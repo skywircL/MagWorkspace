@@ -14,6 +14,7 @@ const MaxEditableDocumentBytes = MaxExtractedBytes
 type Document struct {
 	ID               string    `json:"id"`
 	WorkspaceID      string    `json:"workspace_id"`
+	KnowledgeBaseID  string    `json:"knowledge_base_id"`
 	Title            string    `json:"title"`
 	CurrentVersionID string    `json:"current_version_id"`
 	CreatedBy        string    `json:"created_by"`

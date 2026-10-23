@@ -44,13 +44,13 @@ func TestHarnessRetrievalDemoAndStreamUseBackendEvidence(t *testing.T) {
 			request := retrievalRequest()
 			request.History = []Message{{Role: "user", Content: "previous"}, {Role: "assistant", Content: "previous reply"}}
 			var calls atomic.Int32
-			request.ToolHandler = func(ctx context.Context, name string, raw json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(ctx context.Context, name string, raw json.RawMessage) (any, error) {
 				calls.Add(1)
 				if name != "search_knowledge" || ctx.Err() != nil || strings.Contains(string(raw), "user_id") || strings.Contains(string(raw), "workspace_id") {
 					t.Errorf("invalid callback %s %s", name, raw)
 				}
 				return map[string]any{"evidence": []any{evidenceForTest(request)}}, nil
-			}
+			})
 			client := mustClient(t, harnessConfig(t))
 			var result Result
 			var err error
@@ -79,7 +79,7 @@ func TestHarnessRetrievalRejectsForeignScopeAndForgedContent(t *testing.T) {
 			request := retrievalRequest()
 			ids := []string{strings.Repeat("6", 32)}
 			request.DocumentIDs = &ids
-			request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 				evidence := evidenceForTest(request)
 				switch kind {
 				case "workspace":
@@ -92,7 +92,7 @@ func TestHarnessRetrievalRejectsForeignScopeAndForgedContent(t *testing.T) {
 					evidence["content"] = "forged private content"
 				}
 				return map[string]any{"evidence": []any{evidence}}, nil
-			}
+			})
 			result, err := mustClient(t, harnessConfig(t)).Run(context.Background(), request)
 			// Failed tool results may become an honest no-evidence response. They
 			// must never become a cited or leaked passage in the final transcript.
@@ -107,10 +107,10 @@ func TestHarnessRetrievalEmptyScopeDoesNotExpand(t *testing.T) {
 	request := retrievalRequest()
 	ids := []string{}
 	request.DocumentIDs = &ids
-	request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+	request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 		// Even a buggy backend returning a valid document cannot broaden scope.
 		return map[string]any{"evidence": []any{evidenceForTest(request)}}, nil
-	}
+	})
 	result, err := mustClient(t, harnessConfig(t)).Run(context.Background(), request)
 	if err != nil || strings.Contains(result.Answer, "[E:") || strings.Contains(result.Answer, "500") {
 		t.Fatalf("explicit empty scope expanded: %+v %v", result, err)
@@ -150,10 +150,10 @@ print(json.dumps({"run_id":req["run_id"],"session_id":req["session_id"],"status"
 `
 	request := requestForTest()
 	var calls atomic.Int32
-	request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+	request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 		calls.Add(1)
 		return map[string]any{"evidence": []any{}}, nil
-	}
+	})
 	result, err := mustClient(t, fakeScriptConfig(t, script)).Run(context.Background(), request)
 	if err != nil || calls.Load() != 1 {
 		t.Fatalf("invalid callbacks reached handler: calls=%d error=%v", calls.Load(), err)
@@ -179,10 +179,10 @@ print(json.dumps({"run_id":r["run_id"],"session_id":r["session_id"],"status":"co
 `
 		request := requestForTest()
 		request.DocumentIDs = ids
-		request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+		request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 			t.Fatal("unexpected callback")
 			return nil, nil
-		}
+		})
 		result, err := mustClient(t, fakeScriptConfig(t, script)).Run(context.Background(), request)
 		want := "null"
 		if ids != nil {
@@ -204,12 +204,12 @@ urllib.request.urlopen(req,timeout=60).read()
 	request := requestForTest()
 	started := make(chan struct{})
 	ended := make(chan struct{})
-	request.ToolHandler = func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
+	request.ToolHandler = testToolCapabilities(func(ctx context.Context, _ string, _ json.RawMessage) (any, error) {
 		close(started)
 		<-ctx.Done()
 		close(ended)
 		return nil, ctx.Err()
-	}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { _, err := mustClient(t, fakeScriptConfig(t, script)).Run(ctx, request); done <- err }()
@@ -248,7 +248,7 @@ else: raise Exception("unexpected success")
 print(json.dumps({"run_id":r["run_id"],"session_id":r["session_id"],"status":"completed","answer":"ok","mode":"demo","messages":[{"role":"user","content":r["query"]},{"role":"assistant","content":"ok"}]}))
 `
 			request := requestForTest()
-			request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 				switch kind {
 				case "panic":
 					panic("PRIVATE panic")
@@ -257,7 +257,7 @@ print(json.dumps({"run_id":r["run_id"],"session_id":r["session_id"],"status":"co
 				default:
 					return strings.Repeat("x", maxToolResponseBytes+1), nil
 				}
-			}
+			})
 			result, err := mustClient(t, fakeScriptConfig(t, script)).Run(context.Background(), request)
 			if err != nil || result.Answer != "ok" {
 				t.Fatalf("callback failure escaped bounds: %+v %v", result, err)
@@ -298,10 +298,10 @@ func TestHarnessLiveRetrievalToolsAndCitationValidation(t *testing.T) {
 			t.Run(fmt.Sprintf("stream=%t/%s", stream, scenario), func(t *testing.T) {
 				request := retrievalRequest()
 				var toolCalls atomic.Int32
-				request.ToolHandler = func(context.Context, string, json.RawMessage) (any, error) {
+				request.ToolHandler = testToolCapabilities(func(context.Context, string, json.RawMessage) (any, error) {
 					toolCalls.Add(1)
 					return map[string]any{"evidence": []any{evidenceForTest(request)}}, nil
-				}
+				})
 				var providerCalls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					raw, err := io.ReadAll(r.Body)
@@ -314,7 +314,7 @@ func TestHarnessLiveRetrievalToolsAndCitationValidation(t *testing.T) {
 					var payload struct {
 						Tools []any `json:"tools"`
 					}
-					if err := json.Unmarshal(raw, &payload); err != nil || len(payload.Tools) != 7 {
+					if err := json.Unmarshal(raw, &payload); err != nil || len(payload.Tools) != 8 {
 						t.Errorf("native provider did not receive the four read tools, ask_user and two approval-gated write tools: %s %v", raw, err)
 					}
 					if providerCalls.Add(1) == 1 {
@@ -442,14 +442,14 @@ func TestHarnessLiveReadEvidenceRequiresPriorAcquisition(t *testing.T) {
 		t.Run(fmt.Sprint(acquired), func(t *testing.T) {
 			request := retrievalRequest()
 			var searches, reads atomic.Int32
-			request.ToolHandler = func(_ context.Context, name string, _ json.RawMessage) (any, error) {
+			request.ToolHandler = testToolCapabilities(func(_ context.Context, name string, _ json.RawMessage) (any, error) {
 				if name == "search_documents" {
 					searches.Add(1)
 					return map[string]any{"evidence": []any{evidenceForTest(request)}}, nil
 				}
 				reads.Add(1)
 				return evidenceForTest(request), nil
-			}
+			})
 			var step atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				n := step.Add(1)
@@ -480,5 +480,16 @@ func TestHarnessLiveReadEvidenceRequiresPriorAcquisition(t *testing.T) {
 				t.Fatalf("unacquired ID reached backend or final answer: %+v %v reads=%d", result, err, reads.Load())
 			}
 		})
+	}
+}
+
+// Legacy fixtures retain their operation-specific assertions while answering
+// the private capability handshake before the model's first request.
+func testToolCapabilities(handler ToolHandler) ToolHandler {
+	return func(ctx context.Context, name string, args json.RawMessage) (any, error) {
+		if name == "tool_capabilities" {
+			return map[string]any{"tools": []string{"ask_user", "search_conversations", "list_knowledge_bases", "list_documents", "read_document", "search_knowledge", "search_documents", "read_evidence", "create_document", "update_document"}}, nil
+		}
+		return handler(ctx, name, args)
 	}
 }

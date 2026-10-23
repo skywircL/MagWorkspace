@@ -169,7 +169,19 @@ func validateIndexSourceTx(ctx context.Context, tx *sql.Tx, expected domain.Inde
 }
 
 func queueWorkspaceObjectsTx(ctx context.Context, tx *sql.Tx, workspaceID string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT v.object_key FROM document_versions v JOIN documents d ON d.id=v.document_id WHERE d.workspace_id=? AND v.object_key<>''`, workspaceID)
+	return queueDocumentObjectsTx(ctx, tx, workspaceID, "")
+}
+
+// queueDocumentObjectsTx must run before deleting version rows, while the
+// caller holds the workspace lock. An empty documentID covers the workspace.
+func queueDocumentObjectsTx(ctx context.Context, tx *sql.Tx, workspaceID, documentID string) error {
+	query := `SELECT v.object_key FROM document_versions v JOIN documents d ON d.id=v.document_id WHERE d.workspace_id=? AND v.object_key<>''`
+	args := []any{workspaceID}
+	if documentID != "" {
+		query += ` AND d.id=?`
+		args = append(args, documentID)
+	}
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}

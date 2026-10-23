@@ -362,15 +362,10 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 		if err != nil {
 			return err
 		}
-		// An explicit selection is a durable capability boundary even when a
-		// document was never read and has no acquired-source row yet.
-		for _, documentID := range out.DocumentIDs {
-			if _, err = documentInWorkspace(ctx, tx, wid, documentID); err != nil {
-				if errors.Is(err, domain.ErrNotFound) {
-					return domain.ErrConflict
-				}
-				return err
-			}
+		// Restore the immutable backend scope, including selected libraries that
+		// have not produced any tool result yet.
+		if err = validateRunScopeForResumeTx(ctx, tx, wid, rid, out.DocumentIDs); err != nil {
+			return err
 		}
 		valid, err := runSourcesValidTx(ctx, tx, wid, rid, out.DocumentIDs)
 		if err != nil {

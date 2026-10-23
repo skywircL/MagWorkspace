@@ -35,15 +35,23 @@ python3 scripts/dev-webui.py --backend http://127.0.0.1:8080 --port 5173
 
 访问 `http://127.0.0.1:5173/`，编辑 `internal/webui/assets/` 后刷新即可看到变化；无需 npm 安装或重编译 Go。开发入口只监听本地回环地址，并同源转发 API 与 SSE；生产入口仍由 Go embed 打包，更新内嵌资源需重新构建。会话支持改名、删除与 Ctrl/⌘+Enter 发送，示例任务只填入输入框；发送被拒绝时保留草稿。
 
+## 知识库与文档
+
+Workspace 内可建立多个知识库，owner/admin 管理库，owner/admin/contributor 上传、编辑和删除文档。页面支持切换、创建、编辑和删除知识库，文档列表与搜索只显示当前库。聊天输入区可输入 `@` 搜索并选择知识库或具体文档，也可通过范围按钮选择“全部知识库 / 指定资料 / 不使用知识库”；最多选择20个库和100份文档。选择整个 A 库与 B 库中的文档 D，范围是“整个 A 库＋D”；选择 A 库及其文档时，整个库覆盖单文档选择。
+
+聊天范围独立于文档页的库选择。同一标签页按会话记住所选资源，刷新后保留，切空间/退出清空；失效资源需移除或重选后发送。发送通过 `knowledge_base_ids`、`document_ids` 固定本轮目标，模型工具只能继续缩小，暂停/恢复沿用原范围。当前不包含标签选择或 Agent 默认绑定知识库。注册和新建空间会建立默认库，删除最后一个库后保持空态；未指定库的普通 API 创建使用默认库。详见[知识库 API](docs/api.md#知识库)与[资源选择设计](docs/decisions/034-resource-mention-scope.md)。
+
+全文更新保存新版本并排队，索引就绪前旧版不再参与正常检索，历史版本仍可追溯。删除文档或知识库会移除全部版本和分块，并持久登记 MinIO 原文件与 Qdrant 索引清理；外部服务失败时继续重试，关闭索引服务期间Qdrant清理任务持久等待。删库保留 Workspace、会话、成员和个人记忆，无恢复入口。设计、并发和迁移边界见[知识库生命周期](docs/decisions/029-knowledge-base-lifecycle.md)。
+
 ## 文档处理与存储职责
 
 当前默认使用 Qdrant 内置中文 BM25、稠密向量和原生 RRF。隔离真实栈验收见[迭代023](docs/iterations/023-qdrant-native.md)，统计更新与生命周期设计见[决策017](docs/decisions/017-qdrant-native-retrieval.md)。
 
 | 服务 | 唯一职责 |
 |---|---|
-| MySQL | 用户、Workspace/权限、私有会话消息、Run状态与执行日志正文、提问/审批及暂停快照、个人长期记忆与墓碑、文档及版本元数据、父子分块正文及关系、索引任务状态与发布记录、来源关系及待清理对象记录 |
+| MySQL | 用户、Workspace/权限、知识库及文档归属、私有会话消息、Run状态与执行日志正文、提问/审批及暂停快照、个人长期记忆与墓碑、文档及版本元数据、父子分块正文及关系、索引任务状态与发布记录、来源关系及待清理对象记录 |
 | MinIO | 上传及生成的原始文件；未来解析图片等文件类资源也归文件存储，不保存Agent业务状态或日志正文 |
-| Redis | Asynq 索引执行与去重、短期处理进度和 SSE 补发；可靠投递与重试预算由 MySQL outbox 持有 |
+| Redis | Asynq 索引与记忆采集执行、投递去重、短期处理进度和 SSE 补发；可靠投递与重试预算由 MySQL outbox 持有 |
 | Qdrant | 子块的内置多语言 BM25、向量索引与 RRF，可由原文重建 |
 | Ollama + bge-m3 | 为子块和查询本地生成 1024 维向量 |
 | TEI + mMARCO MiniLM | 对已召回且重新鉴权的子块进行相关性评分；不扫描全库，不写索引 |
@@ -90,11 +98,13 @@ live SSE 与 live JSON 均使用 Harness 的 `DeepSeekChatModel`，上游需要�
 
 模型窗口、输出预留和私有摘要预算通过 Harness 服务环境显式配置，JSON/SSE 共用安全压缩与硬预算。授权历史按完整回合有界加载，普通聊天原文保持；运行内 checkpoint 可经既有日志恢复。配置及限制见[长上下文管理](docs/context.md)。
 
-修改模型/预算配置后更新 `harness` 容器；模式、服务凭据或通信地址变更时同时更新 `backend`。Magent 提供 `search_knowledge`、`read_document`、`list_documents`、`search_conversations` 和 `ask_user`；Go 根据认证身份和 Run 文档范围处理请求。关闭索引时目录、历史会话和提问仍可用。`ask_user` 持久暂停，用户答复后恢复同一 Run；详见 [工具与提问 API](docs/api.md#agent-工具与用户提问)。新增 `create_document` / `update_document`，每次写入均通过原生 tool_approval 持久暂停，批准后追加不可变版本；详见[文档写入与审批](docs/api.md#agent-文档写入与审批)。支持小型TXT/Markdown原文分页、JSON/SSE批准或拒绝及持久写入回执；前端已接入完整审批展示。
+live 多轮对话会先结合近期授权历史理解追问：需要新资料时先通过工具发现和选择知识库，再将补全指代后的query用于首次知识检索，保留所选库筛选；历史足以回答时可不检索，仍允许Agent按需要调用工具。理解失败保留原问题走原有流程，普通聊天记录不被改写。该步骤增加一次有界模型调用；启用条件、预算和恢复语义见[多轮问题理解](docs/decisions/028-conversation-query-understanding.md)。
 
-回答使用 `[E:<32位证据ID>]` 引用本次 Run 实际获得的固定版本原文；JSON 和 SSE `run.completed` 均返回 `citations`，可按其中的 `passage_url` 获取原文片段，按 `source_url` 下载固定版本。引用读取重新鉴权并校验 MySQL 中固定 generation 的正文与摘要。新策略下文档换头不会改变历史父引用，软删除后不可读取。定位为抽取文本的 UTF-8 字节区间，暂不提供 PDF 页码/高亮区域。
+修改模型/预算配置后更新 `harness` 容器；模式、服务凭据或通信地址变更时同时更新 `backend`。Magent 按当前能力提供 `list_knowledge_bases`、`search_knowledge`、`read_document`、`list_documents`、`search_conversations` 和 `ask_user`；Go 根据认证身份和 Run 的知识库/文档目标处理请求。检索/文档目录可用 `knowledge_base_ids` 收窄到多个库，仍保留每个库内的文档限制；关闭索引时隐藏检索，目录、历史会话和提问仍可用。每次运行和恢复通过私有能力握手限制 schema 与实际执行。`ask_user` 持久暂停，用户答复后恢复同一 Run；详见 [工具与提问 API](docs/api.md#agent-工具与用户提问)。新增 `create_document` / `update_document`，每次写入均通过原生 tool_approval 持久暂停，批准后追加不可变版本；详见[文档写入与审批](docs/api.md#agent-文档写入与审批)。支持小型TXT/Markdown原文分页、JSON/SSE批准或拒绝及持久写入回执；前端已接入完整审批展示。
 
-消息请求可带 `document_ids`：省略或 null 表示当前有权读取的 Workspace，`[]` 表示无文档，非空数组限制到指定文档（最多100个、不重复）。来源限制同时用于工具、最终提交和后续模型历史；旧回答从已删除或超出范围来源派生时，过滤发送给模型的回合，数据库历史保留。demo 模式用真实工具结果生成确定性引用，仍不调用模型。详见 [可信引用 API](docs/api.md#可信检索与引用)。
+回答使用 `[E:<32位证据ID>]` 引用本次 Run 实际获得的固定版本原文；JSON 和 SSE `run.completed` 均返回 `citations`，可按其中的 `passage_url` 获取原文片段，按 `source_url` 下载固定版本。引用读取重新鉴权并校验 MySQL 中固定 generation 的正文与摘要。新策略下文档换头不会改变历史父引用，文档或所属知识库删除后不可读取。定位为抽取文本的 UTF-8 字节区间，暂不提供 PDF 页码/高亮区域。
+
+消息请求的 `knowledge_base_ids` 和 `document_ids` 均省略或为 null 时使用当前有权读取的 Workspace；否则取显式选择的知识库与文档的并集，只有空选择时表示不使用知识资源。来源限制同时用于工具、最终提交和后续模型历史；旧回答从已删除或超出范围来源派生时，过滤发送给模型的回合，数据库历史保留。Run 的权威目标保存在 MySQL，恢复不能用新请求或 Harness 的平面文档字段扩大范围；旧 Run 保持创建时的范围语义。demo 模式用真实工具结果生成确定性引用，仍不调用模型。详见 [可信引用 API](docs/api.md#可信检索与引用)。
 
 ## 最小调用
 
@@ -139,7 +149,7 @@ live 模式转发上游实际文本增量；demo 仅用于验证流协议，不�
 - [可信引用验收记录](docs/iterations/005-trusted-retrieval.md)
 - [存储与 Agent 边界决策](docs/decisions/001-backend-boundaries.md)
 
-基础工作台与维护流程见[迭代017](docs/iterations/017-web-workbench.md)，最新真实后端联调及刷新登录恢复见[迭代018](docs/iterations/018-real-web-session.md)，此前真实全链路验收见[迭代015](docs/iterations/015-minimal-web-live.md)。当前前端不含成员管理、PDF 内嵌预览及文档范围选择；这些已有后端能力可继续通过 API 使用（PDF 使用下载）。SSO / 邮件验证尚未实现。对外发布前仍需 HTTPS、备份恢复和部署策略；本地默认只监听回环地址。
+基础工作台与维护流程见[迭代017](docs/iterations/017-web-workbench.md)，真实后端联调及刷新登录恢复见[迭代018](docs/iterations/018-real-web-session.md)，此前真实全链路验收见[迭代015](docs/iterations/015-minimal-web-live.md)，当前 `@` 资源选择的验收状态见[迭代048](docs/iterations/048-resource-mentions.md)。前端不含成员管理与 PDF 内嵌预览；成员管理可通过 API 使用，PDF 使用下载。SSO / 邮件验证尚未实现。对外发布前仍需 HTTPS、备份恢复和部署策略；本地默认只监听回环地址。
 
 
 ### Redis
@@ -147,5 +157,7 @@ live 模式转发上游实际文本增量；demo 仅用于验证流协议，不�
 默认 Compose 已启用 Redis；运行 `scripts/init-env.py` 创建新配置时会生成独立密码。已有 `.env` 需设置 `REDIS_PASSWORD`，本机开发使用 `REDIS_ADDR=127.0.0.1:16379`，Compose backend 自动连接 `redis:6379`。端口仅绑定回环，`REDIS_PORT` 可调整。Redis AOF 保存在独立 `redis-data` 卷。
 
 索引采用事务 outbox + Asynq：原文版本与投递意图同时提交，Redis 队列丢失可重建，重复投递不会覆盖已发布结果。临时故障默认自动重试3次，可用 `INDEX_MAX_RETRIES=0..10` 调整；耗尽后保留失败原因，仍可在文档详情手动重试。Redis 暂时不可用时上传意图保留，恢复后继续执行。只在未设置 `REDIS_ADDR` 的开发入口使用数据库轮询。恢复流程与边界见[可靠索引投递](docs/decisions/025-index-outbox-asynq.md)。
+
+记忆采集同样使用事务 outbox + Asynq，独立队列 `mw-memory-capture`、每进程1个worker，不受文档索引开关影响。成功回答与采集投递意图在同一 MySQL 事务提交，Redis只保存任务ID和投递ID。Redis故障期间任务等待补投，不占用聊天请求执行；恢复后继续采集。模型最多尝试3次（含首次），失败延后5/10秒，由MySQL统一控制。Harness明确返回提取槽忙时等待容量，不消耗模型预算；未知网络失败不视为未执行。未配置Redis时使用数据库轮询；前端继续通过处理状态接口查看结果。详见[记忆采集可靠投递](docs/decisions/030-memory-outbox-asynq.md)。
 
 索引状态接口增加可选 `progress`（stage/chunks/updated_at），前端展示真实处理阶段。`GET .../sessions/{sessionID}/runs/{runID}/events` 为认证只读 SSE 订阅，接受 POST SSE 提供的 `Last-Event-ID: generation:sequence`；无游标从首条读取。409 表示缓存不完整或执行已更换，503 表示 Redis 不可用，应读取现有 Run/消息。事件保留30分钟、最多4096条。订阅不会重新执行 Agent，原 POST 断连仍取消执行。前端沿用显式恢复按钮，不自动重跑。`/readyz` 的 `redis` 字段可为 ready/degraded/disabled，数据库正常时降级仍可服务。

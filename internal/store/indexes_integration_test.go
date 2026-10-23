@@ -434,7 +434,7 @@ func TestMySQLIndexDeletionQueuesCleanupWithoutLeakingSearch(t *testing.T) {
 	hits, err := s.ResolveIndexes(ctx, u.ID, w.ID, profile.ID, []string{job.ID})
 	must(t, err)
 	if len(hits) != 0 {
-		t.Fatal("soft-deleted document leaked through candidate resolution")
+		t.Fatal("deleted document leaked through candidate resolution")
 	}
 	pending, err := s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
@@ -445,7 +445,7 @@ func TestMySQLIndexDeletionQueuesCleanupWithoutLeakingSearch(t *testing.T) {
 	pending, err = s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
 	if len(pending) != 1 || pending[0].Generation != job.Generation {
-		t.Fatalf("soft delete did not queue index cleanup: %+v", pending)
+		t.Fatalf("document deletion did not queue index cleanup: %+v", pending)
 	}
 	runningDoc, err := s.CreateDocument(ctx, u.ID, w.ID, "Delete running", "running.txt", nil)
 	must(t, err)
@@ -462,7 +462,7 @@ func TestMySQLIndexDeletionQueuesCleanupWithoutLeakingSearch(t *testing.T) {
 	wantError(t, finishTestIndex(s, running.Job), domain.ErrNotFound)
 	must(t, s.pool.QueryRowContext(ctx, `SELECT not_before FROM index_cleanup WHERE generation=?`, running.Job.Generation).Scan(&protectedUntil))
 	if protectedUntil.Before(lease.Add(30 * time.Second)) {
-		t.Fatal("soft delete did not copy the running lease into durable cleanup protection")
+		t.Fatal("document deletion did not copy the running lease into durable cleanup protection")
 	}
 	pending, err = s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
@@ -479,8 +479,8 @@ func TestMySQLIndexDeletionQueuesCleanupWithoutLeakingSearch(t *testing.T) {
 	}
 	pending, err = s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
-	if len(pending) != 0 {
-		t.Fatal("workspace cascade lost cleanup grace or live lease protection")
+	if len(pending) != 1 || pending[0].Generation != job.Generation {
+		t.Fatal("workspace cascade changed an earlier cleanup or lost live lease protection")
 	}
 	s.Close()
 	reopened, err := Open(ctx, dsn)
@@ -493,7 +493,7 @@ func TestMySQLIndexDeletionQueuesCleanupWithoutLeakingSearch(t *testing.T) {
 	}
 	pending, err = reopened.PendingIndexCleanup(ctx, 20)
 	must(t, err)
-	if len(pending) != 0 {
+	if len(pending) != 1 || pending[0].Generation != job.Generation {
 		t.Fatal("restart forgot the durable cleanup wait")
 	}
 	expireTestIndexCleanup(t, reopened, job.Generation)

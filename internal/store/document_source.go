@@ -33,7 +33,7 @@ func (s *Store) RunDocumentSource(ctx context.Context, uid, wid, sid, rid, did, 
 			if err := authorizeEvidenceRunTx(ctx, tx, uid, wid, sid, rid, true); err != nil {
 				return err
 			}
-			if err := runAllowsDocumentTx(ctx, tx, rid, did); err != nil {
+			if err := runAllowsDocumentTx(ctx, tx, wid, rid, did); err != nil {
 				return err
 			}
 			doc, err := toolDocumentTx(ctx, tx, wid, did, "", "", "")

@@ -49,7 +49,13 @@ func (s *server) knowledgeTool(ctx context.Context, uid, wid, sid, rid, name str
 		profileID = s.cfg.Indexing.IndexProfile().ID
 	}
 	switch name {
-	case "list_documents":
+	case "tool_capabilities":
+		if strictToolArgs(raw, &struct{}{}) != nil {
+			return nil, domain.ErrInvalid
+		}
+		names, err := s.db.RunToolCapabilities(ctx, uid, wid, sid, rid, s.cfg.Indexing != nil)
+		return map[string]any{"tools": names}, err
+	case "list_knowledge_bases":
 		var in struct {
 			Keyword string `json:"keyword"`
 			Offset  int    `json:"offset"`
@@ -62,12 +68,28 @@ func (s *server) knowledgeTool(ctx context.Context, uid, wid, sid, rid, name str
 		if err != nil {
 			return nil, err
 		}
-		return s.db.RunToolDocuments(ctx, uid, wid, sid, rid, in.Keyword, profileID, in.Offset, limit)
+		return s.db.RunToolKnowledgeBases(ctx, uid, wid, sid, rid, in.Keyword, in.Offset, limit)
+	case "list_documents":
+		var in struct {
+			Keyword          string   `json:"keyword"`
+			KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
+			Offset           int      `json:"offset"`
+			Limit            *int     `json:"limit"`
+		}
+		if strictToolArgs(raw, &in) != nil {
+			return nil, domain.ErrInvalid
+		}
+		limit, err := toolLimit(in.Limit, 10, 20)
+		if err != nil {
+			return nil, err
+		}
+		return s.db.RunToolDocumentsInKnowledgeBases(ctx, uid, wid, sid, rid, in.Keyword, profileID, in.Offset, limit, in.KnowledgeBaseIDs)
 	case "search_knowledge":
 		var in struct {
-			Query string `json:"query"`
-			Mode  string `json:"mode"`
-			Limit *int   `json:"limit"`
+			Query            string   `json:"query"`
+			KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
+			Mode             string   `json:"mode"`
+			Limit            *int     `json:"limit"`
 		}
 		if strictToolArgs(raw, &in) != nil {
 			return nil, domain.ErrInvalid
@@ -86,18 +108,18 @@ func (s *server) knowledgeTool(ctx context.Context, uid, wid, sid, rid, name str
 		default:
 			return nil, domain.ErrInvalid
 		}
-		scope, err := s.db.RunDocumentScope(ctx, uid, wid, sid, rid)
+		scope, err := s.db.RunResourceScope(ctx, uid, wid, sid, rid, in.KnowledgeBaseIDs)
 		if err != nil {
 			return nil, err
 		}
 		if s.cfg.Indexing == nil {
 			return nil, agent.ErrUnavailable
 		}
-		hits, err := s.cfg.Indexing.SearchScoped(ctx, uid, wid, in.Query, mode, limit, scope)
+		hits, err := s.cfg.Indexing.SearchResourcesScoped(ctx, uid, wid, in.Query, mode, limit, scope)
 		if err != nil {
 			return nil, err
 		}
-		evidence, err := s.db.RecordRunEvidence(ctx, uid, wid, sid, rid, hits)
+		evidence, err := s.db.RecordRunKnowledgeEvidence(ctx, uid, wid, sid, rid, hits, in.KnowledgeBaseIDs)
 		if err != nil {
 			return nil, err
 		}

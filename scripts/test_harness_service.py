@@ -73,6 +73,55 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     service.Settings()
 
+    def test_live_provider_configuration_matches_current_native_model(self):
+        from bridge import ConfigurationError
+        harness = Path(os.environ.get("MAGENT_TEST_HARNESS_PATH", ROOT.parent / "Magent Harness"))
+        with patch.object(sys, "path", [str(harness / "src"), *sys.path]):
+            from magent_harness import DeepSeekChatModel
+
+        env = {"MAGENT_SERVICE_API_KEY": KEY, "MAGENT_MODE": "live",
+               "MAGENT_CALLBACK_ORIGIN": "http://backend:8081",
+               "MAGENT_BASE_URL": "https://provider.example/v1",
+               "MAGENT_API_KEY": "synthetic-provider-key", "MAGENT_MODEL": "test-model"}
+        for name, value in [
+            ("MAGENT_API_KEY", "synthetic key"), ("MAGENT_API_KEY", "synthetic\tkey"),
+            ("MAGENT_API_KEY", "synthetic\x7fkey"), ("MAGENT_API_KEY", "synthetic-密钥"),
+            ("MAGENT_MODEL", "test\tmodel"), ("MAGENT_MODEL", "test\x01model"),
+            ("MAGENT_BASE_URL", "http://127.0.0.1:99999"),
+            ("MAGENT_BASE_URL", "https://provider.example:invalid"),
+            ("MAGENT_BASE_URL", "https://provider.example /v1"),
+            ("MAGENT_BASE_URL", "https://provider.example/\nv1"),
+            ("MAGENT_BASE_URL", "https://"),
+        ]:
+            values = dict(env, **{name: value})
+            with self.subTest(name=name, value=value), patch.dict(os.environ, values, clear=True):
+                with self.assertRaises(ConfigurationError) as failure:
+                    service.create_app()
+                self.assertEqual(str(failure.exception), "invalid live configuration")
+                # Instantiate the actual adjacent Harness adapter, not a copied
+                # validator. Invalid configurations fail before creating I/O.
+                with self.assertRaises(ValueError):
+                    DeepSeekChatModel(api_key=values["MAGENT_API_KEY"], model=values["MAGENT_MODEL"],
+                                      base_url=values["MAGENT_BASE_URL"])
+
+        async def valid_native(values):
+            async with httpx.AsyncClient(trust_env=False) as client:
+                async with DeepSeekChatModel(api_key=values["MAGENT_API_KEY"], model=values["MAGENT_MODEL"],
+                                            base_url=values["MAGENT_BASE_URL"], client=client) as native:
+                    self.assertEqual(native.model, values["MAGENT_MODEL"])
+
+        for url in ("https://provider.example/v1", "http://127.0.0.1:18000", "http://[::1]:18000"):
+            values = dict(env, MAGENT_BASE_URL=url)
+            with self.subTest(url=url), patch.dict(os.environ, values, clear=True):
+                self.assertEqual(service.create_app().state.settings.mode, "live")
+                asyncio.run(valid_native(values))
+
+        # The deployment boundary intentionally keeps stricter HTTP origins.
+        with patch.dict(os.environ, dict(env, MAGENT_BASE_URL="http://provider.example/v1"), clear=True):
+            with self.assertRaises(ConfigurationError) as failure:
+                service.create_app()
+            self.assertEqual(str(failure.exception), "invalid live configuration")
+
     def test_callbacks_bind_to_exact_configured_origin(self):
         token = "a" * 64
         with patch.dict(os.environ, {}, clear=True):

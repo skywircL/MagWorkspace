@@ -114,7 +114,14 @@ func (s *server) searchDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
-	result, err := s.cfg.Indexing.SearchScopedDetailed(ctx, userID(r), r.PathValue("workspaceID"), in.Query, in.Mode, in.Limit, nil, in.Rerank)
+	var result indexing.SearchResult
+	var err error
+	knowledgeBaseID := r.PathValue("knowledgeBaseID")
+	if knowledgeBaseID == "" {
+		result, err = s.cfg.Indexing.SearchScopedDetailed(ctx, userID(r), r.PathValue("workspaceID"), in.Query, in.Mode, in.Limit, nil, in.Rerank)
+	} else {
+		result, err = s.cfg.Indexing.SearchKnowledgeBase(ctx, userID(r), r.PathValue("workspaceID"), knowledgeBaseID, in.Query, in.Mode, in.Limit, in.Rerank)
+	}
 	if err != nil {
 		var external *indexing.Failure
 		if errors.As(err, &external) {

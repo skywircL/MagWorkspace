@@ -214,7 +214,7 @@ func validToolArguments(tool string, raw json.RawMessage) bool {
 		_, _, err := domain.ParseDocumentMutation(tool, raw)
 		return err == nil
 	case "search_documents", "search_knowledge":
-		if len(fields) < 1 || len(fields) > 3 {
+		if len(fields) < 1 || len(fields) > 4 {
 			return false
 		}
 		var query string
@@ -224,6 +224,10 @@ func validToolArguments(tool string, raw json.RawMessage) bool {
 		for key, value := range fields {
 			switch key {
 			case "query":
+			case "knowledge_base_ids":
+				if tool != "search_knowledge" || !validToolKnowledgeBases(value) {
+					return false
+				}
 			case "mode":
 				var mode string
 				if json.Unmarshal(value, &mode) != nil || ((tool == "search_documents" && mode != "hybrid" && mode != "lexical" && mode != "vector") || (tool == "search_knowledge" && mode != "hybrid" && mode != "keyword" && mode != "semantic")) {
@@ -252,9 +256,9 @@ func validToolArguments(tool string, raw json.RawMessage) bool {
 			seen[id] = true
 		}
 		return true
-	case "restore_evidence":
+	case "tool_capabilities", "restore_evidence":
 		return len(fields) == 0
-	case "list_documents", "search_conversations":
+	case "list_knowledge_bases", "list_documents", "search_conversations":
 		if tool == "search_conversations" && !validToolText(fields["query"], 512, true) {
 			return false
 		}
@@ -264,8 +268,12 @@ func validToolArguments(tool string, raw json.RawMessage) bool {
 				if tool != "search_conversations" || !validToolText(value, 512, true) {
 					return false
 				}
+			case "knowledge_base_ids":
+				if tool != "list_documents" || !validToolKnowledgeBases(value) {
+					return false
+				}
 			case "keyword":
-				if tool != "list_documents" || !validToolText(value, 256, false) {
+				if (tool != "list_documents" && tool != "list_knowledge_bases") || !validToolText(value, 256, false) {
 					return false
 				}
 			case "limit":
@@ -445,4 +453,9 @@ func validToolText(raw json.RawMessage, limit int, required bool) bool {
 func validToolInt(raw json.RawMessage, min, max int) bool {
 	var value int
 	return len(raw) > 0 && string(raw) != "null" && json.Unmarshal(raw, &value) == nil && value >= min && value <= max
+}
+
+func validToolKnowledgeBases(raw json.RawMessage) bool {
+	var ids []string
+	return json.Unmarshal(raw, &ids) == nil && ids != nil && domain.ValidateKnowledgeBaseIDs(ids) == nil
 }

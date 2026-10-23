@@ -203,6 +203,9 @@ func (s *Store) resumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answe
 		if err != nil {
 			return err
 		}
+		if err = validateRunScopeForResumeTx(ctx, tx, wid, rid, out.DocumentIDs); err != nil {
+			return err
+		}
 		valid, err := runSourcesValidTx(ctx, tx, wid, rid, out.DocumentIDs)
 		if err != nil {
 			return err
