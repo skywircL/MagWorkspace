@@ -28,6 +28,10 @@ type indexTestObjects struct {
 	deleted    []string
 }
 
+func (*indexTestObjects) StorageID() string {
+	return domain.StorageBindingID("minio", "test-object", "test-bucket")
+}
+
 func (b *indexTestObjects) Put(ctx context.Context, key string, data []byte) error {
 	b.mu.Lock()
 	hook := b.beforePut
@@ -131,6 +135,10 @@ type indexTestSearch struct {
 	upsertHook  func(context.Context) error
 	searchHook  func(context.Context, indexTestQuery, []domain.IndexCandidate) ([]domain.IndexCandidate, error)
 	deleteError bool
+}
+
+func (*indexTestSearch) StorageID() string {
+	return domain.StorageBindingID("qdrant", "test-vector", "mw_")
 }
 
 func (s *indexTestSearch) Ensure(ctx context.Context, _ string, _ int) error { return ctx.Err() }
@@ -349,6 +357,9 @@ func TestHTTPIndexesPublishAfterSearchAndSQLChunks(t *testing.T) {
 	if queued.Status != "queued" || queued.SourceSHA256 != write.Version.SHA256 || queued.CreatedBy != owner.User.ID || queued.Attempts != 0 {
 		t.Fatalf("upload was not atomically queued: %+v", queued)
 	}
+	if queued.WorkspaceID != write.Document.WorkspaceID || queued.KnowledgeBaseID != write.Document.KnowledgeBaseID || queued.KnowledgeBaseID == "" {
+		t.Fatalf("queued index lost its authoritative ownership: %+v", queued)
+	}
 	upEntered, upRelease := make(chan struct{}, 1), make(chan struct{})
 	var upOnce sync.Once
 	defer upOnce.Do(func() { close(upRelease) })
@@ -371,10 +382,16 @@ func TestHTTPIndexesPublishAfterSearchAndSQLChunks(t *testing.T) {
 	if ready.Status != "ready" || ready.ChunkCount < 2 || ready.Attempts != 1 || ready.Generation == "" {
 		t.Fatalf("missing durable publication: %+v", ready)
 	}
+	if ready.WorkspaceID != queued.WorkspaceID || ready.KnowledgeBaseID != queued.KnowledgeBaseID {
+		t.Fatalf("publication changed index ownership: %+v", ready)
+	}
 	page := x.request(t, "GET", indexChunksPath(write, ready)+"?page=1&page_size=1", owner.Token, nil, 200)
 	chunks := integrationData[[]domain.IndexChunk](t, page)
 	if page.Total != ready.ParentCount || len(chunks) != 1 || chunks[0].IndexID != ready.ID || chunks[0].VersionID != write.Version.ID || chunks[0].SourceSHA256 != write.Version.SHA256 {
 		t.Fatalf("invalid manifest chunk: %+v", chunks)
+	}
+	if chunks[0].WorkspaceID != ready.WorkspaceID || chunks[0].KnowledgeBaseID != ready.KnowledgeBaseID {
+		t.Fatalf("chunk response lost index ownership: %+v", chunks[0])
 	}
 	chunk := integrationData[domain.IndexChunk](t, x.request(t, "GET", indexChunksPath(write, ready)+"/"+chunks[0].ID, owner.Token, nil, 200))
 	if !reflect.DeepEqual(chunk, chunks[0]) {
@@ -387,6 +404,9 @@ func TestHTTPIndexesPublishAfterSearchAndSQLChunks(t *testing.T) {
 	for _, hit := range result.Hits {
 		if hit.Chunk.Content != text[hit.Chunk.StartByte:hit.Chunk.EndByte] || hit.Chunk.IndexID != ready.ID || hit.Score <= 0 {
 			t.Fatalf("result is not canonical: %+v", hit)
+		}
+		if hit.Chunk.WorkspaceID != ready.WorkspaceID || hit.Chunk.KnowledgeBaseID != ready.KnowledgeBaseID {
+			t.Fatalf("search hydration lost index ownership: %+v", hit)
 		}
 	}
 	_, queries, _ := x.search.snapshot()

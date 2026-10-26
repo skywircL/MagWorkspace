@@ -41,7 +41,7 @@ Workspace 内可建立多个知识库，owner/admin 管理库，owner/admin/cont
 
 聊天范围独立于文档页的库选择。同一标签页按会话记住所选资源，刷新后保留，切空间/退出清空；失效资源需移除或重选后发送。发送通过 `knowledge_base_ids`、`document_ids` 固定本轮目标，模型工具只能继续缩小，暂停/恢复沿用原范围。当前不包含标签选择或 Agent 默认绑定知识库。注册和新建空间会建立默认库，删除最后一个库后保持空态；未指定库的普通 API 创建使用默认库。详见[知识库 API](docs/api.md#知识库)与[资源选择设计](docs/decisions/034-resource-mention-scope.md)。
 
-全文更新保存新版本并排队，索引就绪前旧版不再参与正常检索，历史版本仍可追溯。删除文档或知识库会移除全部版本和分块，并持久登记 MinIO 原文件与 Qdrant 索引清理；外部服务失败时继续重试，关闭索引服务期间Qdrant清理任务持久等待。删库保留 Workspace、会话、成员和个人记忆，无恢复入口。设计、并发和迁移边界见[知识库生命周期](docs/decisions/029-knowledge-base-lifecycle.md)。
+全文更新保存新版本并排队，索引就绪前旧版不再参与正常检索，历史版本仍可追溯。删除文档或知识库会移除全部版本和分块，并持久登记 MinIO 原文件与 Qdrant 索引清理；外部服务失败时继续重试，关闭索引生成不停止清理，缺少匹配存储目标时保留任务。删库保留 Workspace、会话、成员和个人记忆，无恢复入口。设计、并发和迁移边界见[知识库生命周期](docs/decisions/029-knowledge-base-lifecycle.md)与[资源清理说明](docs/decisions/038-resource-cleanup-bindings.md)。
 
 ## 文档处理与存储职责
 
@@ -61,7 +61,7 @@ Run journal 中的工具事实和 `context_committed` 上下文摘要保存在 M
 
 上传成功即排队，查询版本 `/index` 观察 `queued/running/ready/failed`。检索支持 `lexical/vector/hybrid`，默认 hybrid；只返回当前版本的已发布索引，引用固定版本与分块。失败任务通过同一版本 POST `/index` 重试。详见 [API](docs/api.md#文档处理与检索)。
 
-解析上限 1 MiB UTF-8 文本；唯一策略 `CHUNKING_STRATEGY=parent_child_v1`，结构优先切父块（最多4096 Unicode字符、无重叠），再在父内切子块（384字符、语义重叠最多76），总计最多8192块。父子正文、偏移、摘要和章节路径保存在MySQL，只有子块送入Qdrant；检索与重排按子块评分、同父合并，再返回完整父正文及其引用身份。阅读和引用回查不下载MinIO清单、不重新分块。原文件继续保存在MinIO；不支持OCR。旧策略拒绝启动，旧测试数据按本轮授权清理，重新上传即可按新策略处理。实现与验收见[父子分块迭代](docs/iterations/036-parent-child-chunks.md)。无法解析的版本保留原文并标记失败。关闭 `DOCUMENT_INDEXING_ENABLED` 可停止自动入队与检索；原文件下载仍需要MinIO。更换embedding或解析配置生成独立profile，旧版本需要显式重新提交索引。
+解析上限 1 MiB UTF-8 文本；唯一策略 `CHUNKING_STRATEGY=parent_child_v1`，结构优先切父块（最多4096 Unicode字符、无重叠），再在父内切子块（384字符、语义重叠最多76），总计最多8192块。父子正文、偏移、摘要和章节路径保存在MySQL，只有子块送入Qdrant；检索与重排按子块评分、同父合并，再返回完整父正文及其引用身份。阅读和引用回查不下载MinIO清单、不重新分块。原文件继续保存在MinIO；不支持OCR。旧策略拒绝启动，旧测试数据按本轮授权清理，重新上传即可按新策略处理。实现与验收见[父子分块迭代](docs/iterations/036-parent-child-chunks.md)。无法解析的版本保留原文并标记失败。关闭 `DOCUMENT_INDEXING_ENABLED` 可停止自动入队与检索；原文件下载仍需要MinIO，已有索引和原文件清理继续独立运行。切换存储前需保留原目标配置，使用 `CLEANUP_QDRANT_STORES` / `CLEANUP_MINIO_STORES` 登记旧目标；未知绑定不会被当前目标替代，配置和数据核对见[资源清理说明](docs/decisions/038-resource-cleanup-bindings.md)。更换embedding或解析配置生成独立profile，旧版本需要显式重新提交索引。
 
 MySQL `chunks.content` 保存父子正文，全部分块与索引 ready 状态在同一事务发布；MySQL 不实现文档全文索引。外部搜索结果仅作候选 ID 提示，返回前从 MySQL 回读正文，重新核验权限、版本、发布 generation、摘要与父子关系。旧单层索引与清单格式不兼容；本轮测试文档及派生数据清理保留账号、Workspace、聊天和长期记忆，旧文档来源的聊天引用失效。服务职责、清理与兼容边界见[父子分块决策](docs/decisions/026-parent-child-relational-chunks.md)。
 
@@ -160,4 +160,4 @@ live 模式转发上游实际文本增量；demo 仅用于验证流协议，不�
 
 记忆采集同样使用事务 outbox + Asynq，独立队列 `mw-memory-capture`、每进程1个worker，不受文档索引开关影响。成功回答与采集投递意图在同一 MySQL 事务提交，Redis只保存任务ID和投递ID。Redis故障期间任务等待补投，不占用聊天请求执行；恢复后继续采集。模型最多尝试3次（含首次），失败延后5/10秒，由MySQL统一控制。Harness明确返回提取槽忙时等待容量，不消耗模型预算；未知网络失败不视为未执行。未配置Redis时使用数据库轮询；前端继续通过处理状态接口查看结果。详见[记忆采集可靠投递](docs/decisions/030-memory-outbox-asynq.md)。
 
-索引状态接口增加可选 `progress`（stage/chunks/updated_at），前端展示真实处理阶段。`GET .../sessions/{sessionID}/runs/{runID}/events` 为认证只读 SSE 订阅，接受 POST SSE 提供的 `Last-Event-ID: generation:sequence`；无游标从首条读取。409 表示缓存不完整或执行已更换，503 表示 Redis 不可用，应读取现有 Run/消息。事件保留30分钟、最多4096条。订阅不会重新执行 Agent，原 POST 断连仍取消执行。前端沿用显式恢复按钮，不自动重跑。`/readyz` 的 `redis` 字段可为 ready/degraded/disabled，数据库正常时降级仍可服务。
+索引状态接口增加可选 `progress`（stage/chunks/updated_at）。流式会话使用独立StreamManager：默认 `STREAM_MANAGER_TYPE=memory`，多实例设为 `redis` 并配置REDIS_ADDR。`GET .../sessions/{sessionID}/runs/{runID}/events` 为认证只读SSE订阅，接受 `Last-Event-ID: generation:sequence`；无游标从首条重放并继续读取。事件保留1小时、最多4096条/8MiB；409表示缓存不完整或执行已更换，503表示存储不可用，应读取现有Run/消息。SSE POST断开后后台继续；`POST .../runs/{runID}/stop {}` 显式停止。浏览器支持重新接收输出，GET不会启动或恢复Agent。已暂停/中断执行仍走原显式恢复入口。`/readyz`的redis字段为ready/degraded/disabled，数据库正常时降级仍可服务；流缓存故障单独明确报错。详见[流接口](docs/api.md#streammanager-事件停止与任务进度)。

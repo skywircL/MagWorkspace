@@ -121,6 +121,7 @@ function prompt(sessionID, runID) {
     },
   };
 }
+const pendingStreams = new Map();
 async function streamMessage(response, sessionID, content) {
   const runID = `run-${runs.size + 1}`;
   const suspended = content === "测试审批基线失败";
@@ -140,11 +141,13 @@ async function streamMessage(response, sessionID, content) {
   send("message.start", { round: 1 });
   send("message.delta", { delta: "临时流式草稿，正在核对资料…" });
   if (stoppable) {
-    await new Promise((resolve) => response.once("close", () => {
+    pendingStreams.set(runID, () => {
       run.status = "failed"; run.error_code = "agent_canceled";
       history.at(-1).status = "failed";
-      resolve();
-    }));
+      send("run.failed", { run_id: runID, error: { code: "agent_canceled" } });
+      response.end(); pendingStreams.delete(runID);
+    });
+    // Losing this browser connection leaves the run active.
     return;
   }
   // Keep the connection open briefly so the browser must render the stream.
@@ -262,10 +265,24 @@ async function handle(request, response) {
           else failure(response, 404, "not_found");
           return;
         }
+        const stop = /^\/runs\/([^/]+)\/stop$/.exec(resource);
+        if (stop && method === "POST") {
+          assert.ok(pendingStreams.has(stop[1])); pendingStreams.get(stop[1])();
+          json(response, { status: "stop_requested" }, 202); return;
+        }
+        const replay = /^\/runs\/([^/]+)\/events$/.exec(resource);
+        if (replay && method === "GET") {
+          const run = runs.get(replay[1]); assert.equal(run.status, "running");
+          run.status = "completed";
+          const history = messages.get(sessionID); history.at(-1).status = "completed";
+          history.push({ role: "assistant", content: "断线后的完整回答", run_id: run.id, status: "completed" });
+          response.writeHead(200, { "Content-Type": "text/event-stream" });
+          response.end(`event: run.started\ndata: ${JSON.stringify({ run_id: run.id })}\n\nevent: message.start\ndata: {"round":1}\n\nevent: message.delta\ndata: {"delta":"重放的草稿"}\n\nevent: run.completed\ndata: ${JSON.stringify({ run_id: run.id, answer: "断线后的完整回答" })}\n\n`); return;
+        }
         const recovery = /^\/runs\/([^/]+)\/recover$/.exec(resource);
         if (recovery && method === "POST") {
           const run = runs.get(recovery[1]);
-          assert.equal(run.status, "failed"); run.status = "completed"; delete run.error_code;
+          assert.equal(run.status, "failed"); assert.equal(run.can_recover, true); run.can_recover = false; run.status = "completed"; delete run.error_code;
           const history = messages.get(sessionID);
           history.at(-1).status = "completed";
           history.push({ role: "assistant", content: richAnswer, run_id: run.id, status: "completed" });
@@ -535,9 +552,25 @@ try {
     history.at(-1).content = richAnswer;
     await page.locator("#refresh-chat").click(); await idle(page);
   });
+  await check("terminal or unknown recovery eligibility never offers a retry", async () => {
+    const history = messages.get(sessions[0].id);
+    const run = { id: 'native-terminal', status: 'failed', error_code: 'agent_failed', can_recover: false };
+    runs.set(run.id, run);
+    history.push({ role: 'user', content: '已结束的原任务', run_id: run.id, status: 'failed' });
+    const before = requests.filter((r) => r.path.endsWith('/recover')).length;
+    for (const available of [false, undefined]) {
+      run.can_recover = available;
+      await page.locator("#refresh-chat").click(); await idle(page);
+      assert.equal(await page.getByRole("button", { name: "尝试恢复原运行", exact: true }).count(), 0);
+      assert.match(await page.locator("#run-state").textContent(), /你的问题已保留，可以继续发送新问题/);
+    }
+    assert.equal(requests.filter((r) => r.path.endsWith('/recover')).length, before);
+    await screenshot(page, "desktop-terminal-run.png");
+    history.pop(); runs.delete(run.id);
+  });
   await check("failed run has a recoverable explanation and preserves its original question", async () => {
     const history = messages.get(sessions[0].id);
-    const run = { id: 'failed-turn', status: 'failed', error_code: 'agent_failed' };
+    const run = { id: 'failed-turn', status: 'failed', error_code: 'agent_failed', can_recover: true };
     runs.set(run.id, run);
     history.push({ role: 'user', content: '请继续核对推荐配置。', run_id: run.id, status: 'failed' });
     await page.locator("#refresh-chat").click(); await idle(page);
@@ -560,7 +593,9 @@ try {
     await page.locator("#query").press("Control+Enter");
     await page.waitForFunction(() => document.querySelector('#draft').textContent.includes('临时流式草稿'));
     assert.equal(await page.locator('#draft button.citation-mark').count(), 0);
+    const stops = requests.filter((r) => r.path.endsWith("/stop")).length;
     await page.locator("#stop").click(); await idle(page);
+    assert.equal(requests.filter((r) => r.path.endsWith("/stop") && r.method === "POST").length, stops + 1);
     assert.equal(await page.locator("#draft").textContent(), "");
     assert.equal(countMessagePosts(), posts + 1);
     assert.equal(history.length, count + 1);
@@ -568,6 +603,18 @@ try {
     await page.locator("#refresh-chat").click(); await idle(page);
     assert.match(await page.locator("#run-state").textContent(), /生成已停止/);
     assert.equal(await page.getByRole("button", { name: "尝试恢复原运行", exact: true }).count(), 0);
+    assert.equal(await page.locator("#send").isEnabled(), true);
+  });
+  await check("running session reconnects with GET without creating another turn", async () => {
+    const history = messages.get(sessions[0].id), posts = countMessagePosts();
+    const run = { id: "detached-turn", status: "running" }; runs.set(run.id, run);
+    history.push({ role: "user", content: "断线后继续", run_id: run.id, status: "running" });
+    await page.locator("#refresh-chat").click(); await idle(page);
+    await screenshot(page, "desktop-reconnect.png");
+    await page.getByRole("button", { name: "继续接收输出", exact: true }).click(); await idle(page);
+    assert.equal(countMessagePosts(), posts);
+    assert.ok(requests.some((r) => r.method === "GET" && r.path.endsWith("/detached-turn/events")));
+    assert.match(await page.locator("#messages").textContent(), /断线后的完整回答/);
     assert.equal(await page.locator("#send").isEnabled(), true);
   });
   await check("session rename and confirmed delete update UI and fixture", async () => {

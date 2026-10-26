@@ -17,6 +17,7 @@ import (
 // Only object I/O is in memory. Authorization, transactions, cleanup and
 // migration assertions all exercise a real isolated MySQL database.
 type memoryObjects struct {
+	storageID  string
 	mu         sync.Mutex
 	data       map[string][]byte
 	putHook    func(context.Context, string) error
@@ -24,7 +25,10 @@ type memoryObjects struct {
 	deleteHook func(context.Context, string) error
 }
 
-func newMemoryObjects() *memoryObjects { return &memoryObjects{data: map[string][]byte{}} }
+func newMemoryObjects() *memoryObjects {
+	return &memoryObjects{storageID: domain.StorageBindingID("memory", "store-test", "objects"), data: map[string][]byte{}}
+}
+func (m *memoryObjects) StorageID() string { return m.storageID }
 func (m *memoryObjects) Put(ctx context.Context, key string, content []byte) error {
 	m.mu.Lock()
 	if _, exists := m.data[key]; exists {
@@ -308,6 +312,9 @@ func TestMySQLObjectsConcurrentAppendAndCleanupFencing(t *testing.T) {
 	if objects.count() != 2 {
 		t.Fatal("late upload survived cleanup or damaged earlier versions")
 	}
+	// The rejected writer requeues its retired key in case its Put completed
+	// after the first delete. Repeated deletion remains safe for live versions.
+	must(t, s.CleanupObjects(ctx))
 	assertObjectQueueCount(t, s, 0)
 }
 
@@ -330,7 +337,7 @@ func TestMySQLObjectsCleanupSurvivesRestartAndWorkspaceDeletion(t *testing.T) {
 	must(t, err)
 	key, err := s.stageDocumentObject(ctx, u.ID, w.ID, documentID, versionID, "", []byte("orphan after crash"))
 	must(t, err)
-	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE object_key=?`, key)
+	_, err = s.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE object_key=?`, key.key)
 	must(t, err)
 	s.Close()
 	reopened, err := Open(ctx, dsn)
@@ -340,6 +347,12 @@ func TestMySQLObjectsCleanupSurvivesRestartAndWorkspaceDeletion(t *testing.T) {
 	objects.deleteHook = func(context.Context, string) error { return blob.ErrUnavailable }
 	wantError(t, reopened.CleanupObjects(ctx), blob.ErrUnavailable)
 	assertObjectQueueCount(t, reopened, 1)
+	var attempts int
+	var errorCode string
+	must(t, reopened.pool.QueryRowContext(ctx, `SELECT attempts,last_error_code FROM object_cleanup WHERE storage_id=? AND object_key=?`, objects.StorageID(), key.key).Scan(&attempts, &errorCode))
+	if attempts != 1 || errorCode != "object_storage_unavailable" {
+		t.Fatal("failed cleanup did not retain a safe retry diagnosis")
+	}
 	objects.deleteHook = nil
 	_, err = reopened.pool.ExecContext(ctx, `UPDATE object_cleanup SET available_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND)`)
 	must(t, err)
@@ -405,6 +418,7 @@ func TestMySQLObjectsMigrationPreservesInlineAndRetriesPartialDDL(t *testing.T) 
 	for _, statement := range []string{
 		`DROP TABLE object_cleanup`,
 		`ALTER TABLE document_versions DROP CHECK document_versions_storage_v2`,
+		`ALTER TABLE document_versions DROP CHECK document_versions_inline_binding`,
 		`ALTER TABLE document_versions DROP COLUMN object_key, MODIFY COLUMN content mediumblob NOT NULL`,
 		`ALTER TABLE document_versions ADD CONSTRAINT document_versions_content_size CHECK(size_bytes BETWEEN 0 AND 8388608 AND size_bytes=OCTET_LENGTH(content))`,
 		`UPDATE schema_version SET version=3 WHERE singleton=1`,

@@ -13,7 +13,7 @@ import (
 )
 
 func testIndexProfile() domain.IndexProfile {
-	return domain.IndexProfile{ID: strings.Repeat("a", 64), Model: "test-embedding", Dimensions: 3}
+	return domain.IndexProfile{ID: strings.Repeat("a", 64), StorageID: strings.Repeat("b", 64), Model: "test-embedding", Dimensions: 3}
 }
 
 func testIndexChunks(job domain.IndexJob, content string) []domain.IndexChunk {
@@ -21,7 +21,7 @@ func testIndexChunks(job domain.IndexJob, content string) []domain.IndexChunk {
 		content = "source"
 	}
 	digest := sha256.Sum256([]byte(content))
-	parent := domain.IndexChunk{IndexID: job.ID, Generation: job.Generation, DocumentID: job.DocumentID, VersionID: job.VersionID, SourceSHA256: job.SourceSHA256, Kind: "parent", ParentOrdinal: -1, StartByte: 0, EndByte: len(content), Content: content, SHA256: hex.EncodeToString(digest[:])}
+	parent := domain.IndexChunk{WorkspaceID: job.WorkspaceID, KnowledgeBaseID: job.KnowledgeBaseID, IndexID: job.ID, Generation: job.Generation, DocumentID: job.DocumentID, VersionID: job.VersionID, SourceSHA256: job.SourceSHA256, Kind: "parent", ParentOrdinal: -1, StartByte: 0, EndByte: len(content), Content: content, SHA256: hex.EncodeToString(digest[:])}
 	identity := sha256.Sum256([]byte(job.ID + job.Generation + "parent" + content))
 	parent.ID = hex.EncodeToString(identity[:16])
 	child := parent
@@ -168,7 +168,7 @@ func TestMySQLIndexLeaseFencingAndProtectedCleanup(t *testing.T) {
 	if string(loaded) != "source" {
 		t.Fatal("claimed legacy source differs from its immutable version")
 	}
-	must(t, s.QueueIndexCleanup(ctx, profile.ID, first.Job.Generation))
+	must(t, s.QueueIndexCleanup(ctx, profile.StorageID, profile.ID, first.Job.Generation))
 	expireTestIndexCleanup(t, s, first.Job.Generation)
 	pending, err := s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
@@ -195,10 +195,12 @@ func TestMySQLIndexLeaseFencingAndProtectedCleanup(t *testing.T) {
 	if len(pending) != 1 || pending[0].Generation != first.Job.Generation {
 		t.Fatalf("reclaim did not retain old generation cleanup: %+v", pending)
 	}
-	oldCleanupID := pending[0].ID
+	claimed, err := s.ClaimIndexCleanup(ctx, []string{profile.StorageID}, 20, time.Minute)
+	must(t, err)
+	oldCleanupID, oldToken := claimed[0].ID, claimed[0].ClaimToken
 	// A late worker may write vectors after the first delete has started.
-	must(t, s.QueueIndexCleanup(ctx, profile.ID, first.Job.Generation))
-	must(t, s.CompleteIndexCleanup(ctx, oldCleanupID))
+	must(t, s.QueueIndexCleanup(ctx, profile.StorageID, profile.ID, first.Job.Generation))
+	must(t, s.CompleteIndexCleanup(ctx, oldCleanupID, oldToken))
 	pending, err = s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
 	if len(pending) != 0 {
@@ -211,7 +213,7 @@ func TestMySQLIndexLeaseFencingAndProtectedCleanup(t *testing.T) {
 		t.Fatal("old cleanup acknowledgement removed a later cleanup request")
 	}
 	must(t, finishTestIndex(s, second.Job))
-	must(t, s.QueueIndexCleanup(ctx, profile.ID, second.Job.Generation))
+	must(t, s.QueueIndexCleanup(ctx, profile.StorageID, profile.ID, second.Job.Generation))
 	expireTestIndexCleanup(t, s, second.Job.Generation)
 	wantError(t, s.FailDocumentIndex(ctx, second.Job, "lost_commit_ack"), domain.ErrConflict)
 	pending, err = s.PendingIndexCleanup(ctx, 20)
@@ -219,8 +221,10 @@ func TestMySQLIndexLeaseFencingAndProtectedCleanup(t *testing.T) {
 	if len(pending) != 1 || pending[0].Generation != first.Job.Generation {
 		t.Fatalf("committed ready generation became cleanup eligible: %+v", pending)
 	}
-	must(t, s.CompleteIndexCleanup(ctx, pending[0].ID))
-	must(t, s.CompleteIndexCleanup(ctx, pending[0].ID))
+	claimed, err = s.ClaimIndexCleanup(ctx, []string{profile.StorageID}, 20, time.Minute)
+	must(t, err)
+	must(t, s.CompleteIndexCleanup(ctx, claimed[0].ID, claimed[0].ClaimToken))
+	must(t, s.CompleteIndexCleanup(ctx, claimed[0].ID, claimed[0].ClaimToken))
 	ready, queued, err := s.EnqueueDocumentIndex(ctx, u.ID, w.ID, write.Document.ID, write.Version.ID, profile)
 	must(t, err)
 	if queued || ready.Status != "ready" || ready.Generation != second.Job.Generation {
@@ -532,14 +536,14 @@ func TestMySQLIndexFailureRetainsCleanupLeaseAndGrace(t *testing.T) {
 	// deadline copied by Fail and rotate its acknowledgement token.
 	var firstID string
 	must(t, s.pool.QueryRowContext(ctx, `SELECT id FROM index_cleanup WHERE generation=?`, input.Job.Generation).Scan(&firstID))
-	must(t, s.QueueIndexCleanup(ctx, profile.ID, input.Job.Generation))
+	must(t, s.QueueIndexCleanup(ctx, profile.StorageID, profile.ID, input.Job.Generation))
 	var secondID string
 	var secondProtection time.Time
 	must(t, s.pool.QueryRowContext(ctx, `SELECT id,not_before FROM index_cleanup WHERE generation=?`, input.Job.Generation).Scan(&secondID, &secondProtection))
 	if firstID == secondID || secondProtection.Before(firstProtection) {
 		t.Fatal("late-worker queue shortened lease protection or reused its acknowledgement")
 	}
-	must(t, s.CompleteIndexCleanup(ctx, firstID))
+	must(t, s.CompleteIndexCleanup(ctx, firstID, strings.Repeat("0", 32)))
 	pending, err := s.PendingIndexCleanup(ctx, 20)
 	must(t, err)
 	if len(pending) != 0 {

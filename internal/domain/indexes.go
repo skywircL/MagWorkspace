@@ -12,6 +12,7 @@ const (
 
 // IndexProfile identifies every input that can affect derived text or vectors.
 type IndexProfile struct {
+	StorageID        string `json:"-"`
 	ID               string `json:"id"`
 	Model            string `json:"model"`
 	Dimensions       int    `json:"dimensions"`
@@ -25,41 +26,45 @@ type IndexProgress struct {
 }
 
 type IndexJob struct {
-	Progress     *IndexProgress `json:"progress,omitempty"`
-	ID           string         `json:"id"`
-	WorkspaceID  string         `json:"workspace_id"`
-	DocumentID   string         `json:"document_id"`
-	VersionID    string         `json:"version_id"`
-	ProfileID    string         `json:"profile_id"`
-	SourceSHA256 string         `json:"source_sha256"`
-	Status       string         `json:"status"`
-	ErrorCode    string         `json:"error_code,omitempty"`
-	Attempts     int            `json:"attempts"`
-	Generation   string         `json:"generation,omitempty"`
-	CreatedBy    string         `json:"created_by"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	FinishedAt   *time.Time     `json:"finished_at,omitempty"`
-	ChunkCount   int            `json:"chunk_count"`
-	ParentCount  int            `json:"parent_count"`
+	StorageID       string         `json:"-"`
+	Progress        *IndexProgress `json:"progress,omitempty"`
+	ID              string         `json:"id"`
+	WorkspaceID     string         `json:"workspace_id"`
+	KnowledgeBaseID string         `json:"knowledge_base_id"`
+	DocumentID      string         `json:"document_id"`
+	VersionID       string         `json:"version_id"`
+	ProfileID       string         `json:"profile_id"`
+	SourceSHA256    string         `json:"source_sha256"`
+	Status          string         `json:"status"`
+	ErrorCode       string         `json:"error_code,omitempty"`
+	Attempts        int            `json:"attempts"`
+	Generation      string         `json:"generation,omitempty"`
+	CreatedBy       string         `json:"created_by"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	FinishedAt      *time.Time     `json:"finished_at,omitempty"`
+	ChunkCount      int            `json:"chunk_count"`
+	ParentCount     int            `json:"parent_count"`
 }
 
 type IndexChunk struct {
-	Kind          string `json:"kind"`
-	ParentID      string `json:"parent_id,omitempty"`
-	ParentOrdinal int    `json:"-"`
-	Generation    string `json:"generation"`
-	ContextHeader string `json:"context_header,omitempty"`
-	ID            string `json:"id"`
-	IndexID       string `json:"index_id"`
-	DocumentID    string `json:"document_id"`
-	VersionID     string `json:"version_id"`
-	SourceSHA256  string `json:"source_sha256"`
-	Ordinal       int    `json:"ordinal"`
-	StartByte     int    `json:"start_byte"`
-	EndByte       int    `json:"end_byte"`
-	Content       string `json:"content"`
-	SHA256        string `json:"sha256"`
+	WorkspaceID     string `json:"workspace_id"`
+	KnowledgeBaseID string `json:"knowledge_base_id"`
+	Kind            string `json:"kind"`
+	ParentID        string `json:"parent_id,omitempty"`
+	ParentOrdinal   int    `json:"-"`
+	Generation      string `json:"generation"`
+	ContextHeader   string `json:"context_header,omitempty"`
+	ID              string `json:"id"`
+	IndexID         string `json:"index_id"`
+	DocumentID      string `json:"document_id"`
+	VersionID       string `json:"version_id"`
+	SourceSHA256    string `json:"source_sha256"`
+	Ordinal         int    `json:"ordinal"`
+	StartByte       int    `json:"start_byte"`
+	EndByte         int    `json:"end_byte"`
+	Content         string `json:"content"`
+	SHA256          string `json:"sha256"`
 }
 
 type IndexInput struct {
@@ -99,6 +104,8 @@ type ChunkSpan struct {
 
 type IndexCleanup struct {
 	ID         string
+	StorageID  string `json:"-"`
 	ProfileID  string
 	Generation string
+	ClaimToken string `json:"-"`
 }

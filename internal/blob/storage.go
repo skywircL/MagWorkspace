@@ -21,6 +21,7 @@ import (
 )
 
 type Storage interface {
+	StorageID() string
 	Put(context.Context, string, []byte) error
 	Read(context.Context, string, int) ([]byte, error)
 	Delete(context.Context, string) error
@@ -30,8 +31,9 @@ var ErrUnavailable = errors.New("object_storage_unavailable")
 var ErrIntegrity = errors.New("object_integrity_failed")
 
 type MinIO struct {
-	client *minio.Client
-	bucket string
+	client    *minio.Client
+	bucket    string
+	storageID string
 }
 
 func NewMinIO(endpoint, bucket, accessKey, secretKey string) (*MinIO, error) {
@@ -46,8 +48,11 @@ func NewMinIO(endpoint, bucket, accessKey, secretKey string) (*MinIO, error) {
 	if err != nil {
 		return nil, errors.New("invalid MinIO configuration")
 	}
-	return &MinIO{client: client, bucket: bucket}, nil
+	return &MinIO{client: client, bucket: bucket, storageID: domain.StorageBindingID("minio", endpoint, bucket)}, nil
 }
+
+// StorageID identifies the destination independently of rotating credentials.
+func (s *MinIO) StorageID() string { return s.storageID }
 
 func (s *MinIO) Ensure(ctx context.Context) error {
 	exists, err := s.client.BucketExists(ctx, s.bucket)

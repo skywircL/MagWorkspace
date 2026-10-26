@@ -22,13 +22,14 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql", "migrations/016_agent_state_content.sql", "migrations/017_knowledge_bases.sql", "migrations/018_document_deletion.sql", "migrations/019_memory_capture_outbox.sql", "migrations/020_knowledge_base_sources.sql", "migrations/021_run_knowledge_base_scopes.sql", "migrations/022_run_search_targets.sql"}
+var migrationFiles = []string{"migrations/001_initial.sql", "migrations/002_documents.sql", "migrations/003_indexes.sql", "migrations/004_document_objects.sql", "migrations/005_evidence.sql", "migrations/006_tool_sources.sql", "migrations/007_run_prompts.sql", "migrations/008_run_journals.sql", "migrations/009_memories.sql", "migrations/010_document_approvals.sql", "migrations/011_document_upload_limits.sql", "migrations/012_memory_settings.sql", "migrations/013_memory_capture.sql", "migrations/014_index_outbox.sql", "migrations/015_parent_child_chunks.sql", "migrations/016_agent_state_content.sql", "migrations/017_knowledge_bases.sql", "migrations/018_document_deletion.sql", "migrations/019_memory_capture_outbox.sql", "migrations/020_knowledge_base_sources.sql", "migrations/021_run_knowledge_base_scopes.sql", "migrations/022_run_search_targets.sql", "migrations/023_index_lineage.sql", "migrations/024_run_relationships.sql", "migrations/025_source_integrity.sql", "migrations/026_prompt_integrity.sql", "migrations/027_memory_capture_lineage.sql", "migrations/028_memory_time_bounds.sql", "migrations/029_cleanup_bindings.sql"}
 
 type Store struct {
 	pool           *sql.DB
 	maxUploadBytes int
 	indexProfile   *domain.IndexProfile
 	objects        blob.Storage
+	objectStores   map[string]blob.Storage
 }
 type rowScanner interface{ Scan(...any) error }
 

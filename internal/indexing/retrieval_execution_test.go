@@ -21,6 +21,8 @@ func (e executionEmbedder) Embed(ctx context.Context, texts []string) ([][]float
 
 type executionSearch func(context.Context, string) ([]domain.IndexCandidate, error)
 
+func (e executionSearch) StorageID() string { return testProfile }
+
 func (e executionSearch) Ensure(context.Context, string, int) error { panic("unexpected Ensure") }
 func (e executionSearch) Upsert(context.Context, string, string, string, []domain.IndexChunk, [][]float32) error {
 	panic("unexpected Upsert")

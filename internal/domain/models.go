@@ -57,6 +57,7 @@ type Message struct {
 }
 
 type Run struct {
+	CanRecover bool       `json:"can_recover"`
 	ID         string     `json:"id"`
 	SessionID  string     `json:"session_id"`
 	Status     string     `json:"status"`

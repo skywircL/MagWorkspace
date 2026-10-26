@@ -71,6 +71,13 @@ class StreamOutput:
             event["delta"] = delta
         self.record({"event": event})
 
+    def _valid_native_round(self, native_round) -> bool:
+        if type(native_round) is not int or native_round < 0:
+            return False
+        if self.native_round is None:
+            return native_round == 0 or self.resuming
+        return native_round in (self.native_round, self.native_round + 1)
+
     def accept(self, frame: bytes) -> None:
         # This is the exact encode_sse_event contract, not a provider SSE parser.
         from magent_harness.events import EventType
@@ -119,15 +126,9 @@ class StreamOutput:
         if kind == "round_started":
             native_round = data.get("round")
             if (
-                type(native_round) is not int
-                or native_round < 0
+                not self._valid_native_round(native_round)
                 or self.active_response is not None
                 or self.final_answer_seen
-                or (self.native_round is None and native_round != 0 and not self.resuming)
-                or (
-                    self.native_round is not None
-                    and native_round not in (self.native_round, self.native_round + 1)
-                )
             ):
                 raise ValueError("invalid native round")
             self.native_round = native_round
@@ -139,12 +140,15 @@ class StreamOutput:
                 or not response_id.strip()
                 or len(response_id.encode("utf-8")) > 256
                 or response_id in self.response_ids
-                or type(native_round) is not int
-                or native_round != self.native_round
+                or not self._valid_native_round(native_round)
                 or self.active_response is not None
                 or self.final_answer_seen
             ):
                 raise ValueError("invalid native response start")
+            # Final synthesis calls the model without round_started, including
+            # recovery at the iteration limit. Apply the same monotonic bound;
+            # response IDs still bind every delta/completion to this exact round.
+            self.native_round = native_round
             self.round += 1
             if self.round > 32:
                 raise ValueError("too many generation attempts")

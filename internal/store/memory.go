@@ -93,7 +93,7 @@ func (s *Store) saveMemory(ctx context.Context, uid, wid, previous string, in do
 		return out, domain.ErrInvalid
 	}
 	in.Content, in.Topic = sanitizeMemory(in.Content), sanitizeMemory(in.Topic)
-	if in.Content == "" || in.Importance < 1 || in.Importance > 5 || (in.ExpiresAt != nil && (math.IsNaN(*in.ExpiresAt) || math.IsInf(*in.ExpiresAt, 0) || *in.ExpiresAt <= float64(time.Now().UnixNano())/1e9)) {
+	if in.Content == "" || in.Importance < 1 || in.Importance > 5 || (in.ExpiresAt != nil && (math.IsNaN(*in.ExpiresAt) || math.IsInf(*in.ExpiresAt, 0) || *in.ExpiresAt >= domain.MaxMemoryTimeSeconds || *in.ExpiresAt <= float64(time.Now().UnixNano())/1e9)) {
 		return out, domain.ErrInvalid
 	}
 	id, err := newID()

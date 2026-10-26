@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 
-	"database/sql"
+	"magworkspace/internal/blob"
 	"magworkspace/internal/domain"
 )
 
@@ -175,6 +177,15 @@ func (s *Store) Run(ctx context.Context, userID, workspaceID, sessionID, runID s
 		}
 		var err error
 		run, err = scanRun(tx.QueryRowContext(ctx, `SELECT id,session_id,status,error_code,mode,created_at,finished_at FROM runs WHERE id=? AND session_id=?`, runID, sessionID))
+		if err != nil {
+			return err
+		}
+		_, err = prepareRunRecoveryTx(ctx, tx, userID, workspaceID, sessionID, runID, run.Status, run.ErrorCode)
+		run.CanRecover = err == nil
+		// An unavailable recovery does not hide the durable run's failure state.
+		if errors.Is(err, domain.ErrConflict) || errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrInvalid) || errors.Is(err, sql.ErrNoRows) || errors.Is(err, blob.ErrIntegrity) {
+			return nil
+		}
 		return err
 	})
 	return run, err

@@ -52,6 +52,7 @@ services:
       tika:
         condition: service_healthy
     environment:
+      STREAM_MANAGER_TYPE: ${STREAM_MANAGER_TYPE:-memory}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}
       DATABASE_URL: "magworkspace:${MYSQL_PASSWORD}@tcp(mysql:3306)/magworkspace?parseTime=true"
@@ -87,6 +88,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3:567m}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
       EMBEDDING_REQUEST_TIMEOUT: ${EMBEDDING_REQUEST_TIMEOUT:-120s}
+      CLEANUP_QDRANT_STORES: ${CLEANUP_QDRANT_STORES:-[]}
+      CLEANUP_MINIO_STORES: ${CLEANUP_MINIO_STORES:-[]}
       QDRANT_URL: http://qdrant:6333
       QDRANT_API_KEY: ${QDRANT_API_KEY:?Set QDRANT_API_KEY in .env}
       BM25_AVG_LEN: ${BM25_AVG_LEN:-256}

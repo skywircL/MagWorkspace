@@ -497,11 +497,31 @@ func TestStreamNativeEventMappingBindsResponseAndHidesPrivateEvents(t *testing.T
 	wrongRound.Data["content"] = "must not forward"
 	foreignPrivate := event("context_compacted", map[string]any{"summary": "PRIVATE_NATIVE_SUMMARY"})
 	foreignPrivate.SessionID = "foreign-session"
+	attemptAt := func(n int) nativeEvent { return response("model_response_started", fmt.Sprintf("attempt-%d", n), n) }
+	deltaAt := func(n int) nativeEvent {
+		e := response("text_delta", fmt.Sprintf("attempt-%d", n), n)
+		e.Data["content"] = "public answer"
+		return e
+	}
+	completeAt := func(n int) nativeEvent {
+		e := response("model_response_completed", fmt.Sprintf("attempt-%d", n), n)
+		e.Data["kind"], e.Data["finish_reason"] = "answer", "stop"
+		return e
+	}
 	cases := map[string]struct {
 		input     []nativeEvent
 		wantError bool
 		wantCount int
+		resume    bool
 	}{
+		"zero tool limit synthesis":     {input: []nativeEvent{started, attempt, delta, complete, final, terminal}, wantCount: 2},
+		"implicit synthesis round":      {input: []nativeEvent{started, round, attempt, delta, complete, attemptAt(1), deltaAt(1), completeAt(1), final, terminal}, wantCount: 4},
+		"recovery at tool limit":        {input: []nativeEvent{event("run_resumed", map[string]any{}), attemptAt(12), deltaAt(12), completeAt(12), final, terminal}, resume: true, wantCount: 2},
+		"implicit skipped round":        {input: []nativeEvent{started, round, attempt, delta, complete, attemptAt(2)}, wantError: true, wantCount: 2},
+		"implicit backward round":       {input: []nativeEvent{started, attemptAt(0), completeAt(0), attemptAt(1), completeAt(1), response("model_response_started", "different", 0)}, wantError: true, wantCount: 2},
+		"invalid first synthesis round": {input: []nativeEvent{started, attemptAt(12)}, wantError: true},
+		"negative synthesis round":      {input: []nativeEvent{started, attemptAt(-1)}, wantError: true},
+		"overlapping synthesis":         {input: []nativeEvent{started, attempt, attemptAt(1)}, wantError: true, wantCount: 1},
 		"private native metadata": {
 			input: []nativeEvent{
 				started, event("context_compacted", map[string]any{"summary": "PRIVATE_NATIVE_SUMMARY"}), round, attempt,
@@ -536,11 +556,11 @@ sys.path.insert(0, %q)
 from streaming import StreamOutput
 from magent_harness.events import Event, EventType
 from magent_harness.sse import encode_sse_event
-output = StreamOutput(json.load(sys.stdin))
+output = StreamOutput(dict(json.load(sys.stdin), recover=json.loads(%q)))
 for item in json.loads(%q):
     output.accept(encode_sse_event(Event(EventType(item["type"]), item["run_id"], item["session_id"], item["data"])))
 output.finish({"run_id":"run-1","session_id":"session-1","status":"completed","mode":"demo","answer":"public answer","messages":[{"role":"user","content":"query"},{"role":"assistant","content":"public answer"}]})
-`, bridgeDir, string(input))
+`, bridgeDir, fmt.Sprint(test.resume), string(input))
 			config.Script = filepath.Join(t.TempDir(), "native-events.py")
 			if err := os.WriteFile(config.Script, []byte(script), 0600); err != nil {
 				t.Fatal(err)

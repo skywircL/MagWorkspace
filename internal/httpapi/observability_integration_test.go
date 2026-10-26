@@ -184,6 +184,7 @@ func TestHTTPObservabilityToolAndPromptLifecycleMetrics(t *testing.T) {
 		}
 		result := promptTestResult(req, promptID)
 		result.Prompt.Question = "private-otel-clarification-question"
+		result.Prompt.Snapshot = promptTestSnapshot(req, result.Prompt)
 		return result, nil
 	})
 	response := x.call(http.MethodPost, sessionPath(session)+"/messages", owner.Token, map[string]string{"content": "private-otel-prompt-query"})

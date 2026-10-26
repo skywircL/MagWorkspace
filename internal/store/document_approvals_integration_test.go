@@ -21,7 +21,7 @@ func writeProposal(t *testing.T, uid, wid, sid, rid, tool string, args any, scop
 	raw, err := json.Marshal(args)
 	must(t, err)
 	in.Approval = &domain.DocumentApproval{Tool: tool, Risk: "write", Description: "Write reviewed text", Reason: "always confirm", Arguments: raw}
-	snapshot, err := json.Marshal(map[string]any{"run_id": rid, "session_id": sid, "query": "write", "caller": map[string]string{"user_id": uid, "workspace_id": wid}, "scope": map[string]any{"workspace_id": wid, "document_ids": scope}, "policy": map[string]string{"access": "confirm"}, "pending": map[string]any{"blocked_index": 0, "tool_calls": []any{map[string]string{"id": in.ToolCallID, "name": tool, "arguments": string(raw)}}}})
+	snapshot, err := json.Marshal(map[string]any{"version": 2, "run_id": rid, "session_id": sid, "query": "write", "caller": map[string]string{"user_id": uid, "workspace_id": wid}, "scope": map[string]any{"workspace_id": wid, "document_ids": scope}, "policy": map[string]string{"access": "confirm"}, "pending": map[string]any{"blocked_index": 0, "tool_calls": []any{map[string]string{"id": in.ToolCallID, "name": tool, "arguments": string(raw)}}}})
 	must(t, err)
 	in.Snapshot = string(snapshot)
 	return in

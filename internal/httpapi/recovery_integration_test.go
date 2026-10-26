@@ -20,6 +20,7 @@ import (
 	"magworkspace/internal/httpapi"
 	"magworkspace/internal/indexing"
 	"magworkspace/internal/store"
+	"magworkspace/internal/stream"
 )
 
 const recoveryPrivateFact = "private-journal-fact-not-for-public-api"
@@ -108,7 +109,7 @@ func recoveryFailedHTTP(t *testing.T, x *indexFixture, auth integrationAuth, ses
 	request := calls[before]
 	run := integrationData[domain.Run](t, x.request(t, http.MethodGet,
 		sessionPath(session)+"/runs/"+request.RunID, auth.Token, nil, http.StatusOK))
-	if run.Status != "failed" || run.ErrorCode != "agent_failed" || request.Generation == 0 || request.JournalHandler == nil {
+	if run.Status != "failed" || run.ErrorCode != "agent_failed" || !run.CanRecover || request.Generation == 0 || request.JournalHandler == nil {
 		t.Fatalf("failed execution did not retain its recovery identity: run=%+v generation=%d", run, request.Generation)
 	}
 	return run, request
@@ -307,8 +308,11 @@ func TestHTTPRecoveryLateCitationFailureCannotFailNewGeneration(t *testing.T) {
 				}
 			})
 			x.server.Close()
+			manager := stream.NewMemory(stream.DefaultTTL)
+			x.config.Streams = manager
 			x.server = httptest.NewServer(httpapi.New(x.store, recoveryStreamingAgent{x.agent}, x.config))
 			originalResult := make(chan integrationResponse, 1)
+			originalSubscribed := make(chan struct{})
 			go func() {
 				if !streaming {
 					originalResult <- x.call(http.MethodPost, sessionPath(session)+"/messages", owner.Token, map[string]string{"content": "旧任务"})
@@ -329,6 +333,7 @@ func TestHTTPRecoveryLateCitationFailureCannotFailNewGeneration(t *testing.T) {
 					return
 				}
 				defer response.Body.Close()
+				close(originalSubscribed)
 				raw, err := io.ReadAll(response.Body)
 				originalResult <- integrationResponse{status: response.StatusCode, body: raw, err: err}
 			}()
@@ -337,6 +342,13 @@ func TestHTTPRecoveryLateCitationFailureCannotFailNewGeneration(t *testing.T) {
 			case original = <-originalEntered:
 			case <-time.After(5 * time.Second):
 				t.Fatal("initial worker did not persist its journal")
+			}
+			if streaming {
+				select {
+				case <-originalSubscribed:
+				case <-time.After(5 * time.Second):
+					t.Fatal("original subscription did not open")
+				}
 			}
 			recoverySQL(t, x, `UPDATE runs SET lease_expires_at=DATE_SUB(UTC_TIMESTAMP(6),INTERVAL 1 SECOND) WHERE id=?`, original.RunID)
 			recoveryResult := make(chan integrationResponse, 1)
@@ -352,14 +364,32 @@ func TestHTTPRecoveryLateCitationFailureCannotFailNewGeneration(t *testing.T) {
 			select {
 			case response := <-originalResult:
 				if streaming {
-					if response.err != nil || response.status != http.StatusOK || !strings.Contains(string(response.body), "event: run.failed") {
-						t.Fatalf("old stream did not terminate after rejected citation: %+v", response)
+					if response.err != nil || response.status != http.StatusOK || !strings.Contains(string(response.body), "event: stream.unavailable") || !strings.Contains(string(response.body), "access_or_execution_changed") || strings.Contains(string(response.body), "旧结果") {
+						t.Fatalf("old subscription did not reject the changed generation: %+v", response)
 					}
 				} else {
 					checkIntegrationResponse(t, response, http.StatusBadGateway)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("old worker did not return its late citation failure")
+			}
+			if streaming {
+				// Subscription completion no longer joins the producer. Its CAS
+				// cleanup follows the old generation's failure persistence attempt.
+				until := time.Now().Add(5 * time.Second)
+				for {
+					live, err := manager.GetLiveRun(context.Background(), session.ID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if live.RunID == "" {
+						break
+					}
+					if time.Now().After(until) {
+						t.Fatal("old producer did not clean up")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
 			}
 			current := integrationData[domain.Run](t, x.request(t, http.MethodGet, sessionPath(session)+"/runs/"+original.RunID, owner.Token, nil, http.StatusOK))
 			if current.Status != "running" || current.ErrorCode != "" {
@@ -387,7 +417,7 @@ func TestHTTPRecoveryRejectsIneligibleRunsAndNewerActiveTurn(t *testing.T) {
 			before := len(x.agent.calls())
 			x.request(t, http.MethodPost, recoveryPath(session, failed.ID), owner.Token, map[string]any{}, http.StatusConflict)
 			got := integrationData[domain.Run](t, x.request(t, http.MethodGet, sessionPath(session)+"/runs/"+failed.ID, owner.Token, nil, http.StatusOK))
-			if len(x.agent.calls()) != before || got.Status != "failed" || got.ErrorCode != code {
+			if len(x.agent.calls()) != before || got.Status != "failed" || got.ErrorCode != code || got.CanRecover {
 				t.Fatalf("ineligible run was claimed or mutated: %+v", got)
 			}
 		})

@@ -238,6 +238,50 @@ func (s *Store) appendRunJournal(ctx context.Context, uid, wid, sid, rid string,
 	return json.RawMessage(append([]byte{}, raw...)), nil
 }
 
+// readRunJournalTx validates stored bytes before a caller interprets journal facts.
+func readRunJournalTx(ctx context.Context, tx *sql.Tx, rid string, head journalHead) ([]json.RawMessage, error) {
+	records := []json.RawMessage{}
+	// Read one sentinel byte beyond the per-record limit so corrupt SQL
+	// values cannot force unbounded materialization before validation.
+	rows, err := tx.QueryContext(ctx, `SELECT seq,digest,LEFT(content,?),content_sha256,size_bytes FROM run_journal_records WHERE run_id=? ORDER BY seq`, maxJournalRecordBytes+2, rid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	total, previous := 0, ""
+	for rows.Next() {
+		var seq uint64
+		var digest, sha string
+		var size int
+		var content []byte
+		if err = rows.Scan(&seq, &digest, &content, &sha, &size); err != nil {
+			return nil, err
+		}
+		if seq != uint64(len(records)+1) || size < 1 || size > maxJournalRecordBytes+1 || len(content) != size {
+			return nil, blob.ErrIntegrity
+		}
+		sum := sha256.Sum256(content)
+		total += len(content)
+		if total > maxJournalBytes || hex.EncodeToString(sum[:]) != sha || content[len(content)-1] != '\n' {
+			return nil, blob.ErrIntegrity
+		}
+		raw := content[:len(content)-1]
+		record, err := decodeJournalEnvelope(raw)
+		if err != nil || record.Seq != seq || record.Digest != digest || record.Previous != previous {
+			return nil, blob.ErrIntegrity
+		}
+		records = append(records, json.RawMessage(raw))
+		previous = record.Digest
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if head.seq != uint64(len(records)) || head.digest != previous || head.total != total {
+		return nil, blob.ErrIntegrity
+	}
+	return records, nil
+}
+
 func (s *Store) loadRunJournal(ctx context.Context, uid, wid, sid, rid string, generation uint64) (any, error) {
 	var head journalHead
 	records := []json.RawMessage{}
@@ -250,45 +294,8 @@ func (s *Store) loadRunJournal(ctx context.Context, uid, wid, sid, rid string, g
 		if err != nil {
 			return err
 		}
-		// Read one sentinel byte beyond the per-record limit so corrupt SQL
-		// values cannot force unbounded materialization before validation.
-		rows, err := tx.QueryContext(ctx, `SELECT seq,digest,LEFT(content,?),content_sha256,size_bytes FROM run_journal_records WHERE run_id=? ORDER BY seq`, maxJournalRecordBytes+2, rid)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		total, previous := 0, ""
-		for rows.Next() {
-			var seq uint64
-			var digest, sha string
-			var size int
-			var content []byte
-			if err = rows.Scan(&seq, &digest, &content, &sha, &size); err != nil {
-				return err
-			}
-			if seq != uint64(len(records)+1) || size < 1 || size > maxJournalRecordBytes+1 || len(content) != size {
-				return blob.ErrIntegrity
-			}
-			sum := sha256.Sum256(content)
-			total += len(content)
-			if total > maxJournalBytes || hex.EncodeToString(sum[:]) != sha || content[len(content)-1] != '\n' {
-				return blob.ErrIntegrity
-			}
-			raw := content[:len(content)-1]
-			record, err := decodeJournalEnvelope(raw)
-			if err != nil || record.Seq != seq || record.Digest != digest || record.Previous != previous {
-				return blob.ErrIntegrity
-			}
-			records = append(records, json.RawMessage(raw))
-			previous = record.Digest
-		}
-		if err := rows.Err(); err != nil {
-			return err
-		}
-		if head.seq != uint64(len(records)) || head.digest != previous || head.total != total {
-			return blob.ErrIntegrity
-		}
-		return nil
+		records, err = readRunJournalTx(ctx, tx, rid, head)
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -310,6 +317,99 @@ func (s *Store) loadRunJournal(ctx context.Context, uid, wid, sid, rid string, g
 		return nil, err
 	}
 	return map[string]any{"records": records}, nil
+}
+
+type runRecoveryPlan struct {
+	domain.RecoveredRun
+	promptID string
+}
+
+// Both GET's availability hint and POST's claim use these current facts. Callers
+// must hold the authorized workspace and private session locks first.
+func prepareRunRecoveryTx(ctx context.Context, tx *sql.Tx, uid, wid, sid, rid, status, code string) (runRecoveryPlan, error) {
+	var out runRecoveryPlan
+	var err error
+	if status != "failed" || (code != "lease_expired" && code != "agent_failed" && code != "interrupted") {
+		return out, domain.ErrConflict
+	}
+	var active bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=? AND id<>? AND status IN ('running','suspended'))`, sid, rid).Scan(&active); err != nil {
+		return out, err
+	}
+	if active {
+		return out, domain.ErrConflict
+	}
+	var head journalHead
+	if err = tx.QueryRowContext(ctx, `SELECT execution_generation,seq,digest,total_bytes FROM run_journal_heads WHERE run_id=? FOR UPDATE`, rid).Scan(&head.generation, &head.seq, &head.digest, &head.total); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return out, domain.ErrConflict
+		}
+		return out, err
+	}
+	if head.seq == 0 {
+		return out, domain.ErrConflict
+	}
+	out.Generation = head.generation
+	records, err := readRunJournalTx(ctx, tx, rid, head)
+	if err != nil {
+		return out, err
+	}
+	for _, raw := range records {
+		record, err := decodeJournalEnvelope(raw)
+		if err != nil {
+			return out, blob.ErrIntegrity
+		}
+		// Native failed/canceled states are terminal. A committed completed
+		// journal remains recoverable when only its Go result delivery was lost.
+		if record.Kind == "failed" || record.Kind == "canceled" {
+			return out, domain.ErrConflict
+		}
+	}
+	out.DocumentIDs, err = runDocumentScopeTx(ctx, tx, rid)
+	if err != nil {
+		return out, err
+	}
+	// Restore the immutable backend scope, including selected libraries that
+	// have not produced any tool result yet.
+	if err = validateRunScopeForResumeTx(ctx, tx, wid, rid, out.DocumentIDs); err != nil {
+		return out, err
+	}
+	valid, err := runSourcesValidTx(ctx, tx, wid, rid, out.DocumentIDs)
+	if err != nil {
+		return out, err
+	}
+	if !valid {
+		return out, domain.ErrConflict
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&out.Query); err != nil {
+		return out, err
+	}
+	var prompt domain.RunPrompt
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM run_prompts WHERE run_id=? AND status IN ('resuming','failed') AND answer<>'' ORDER BY created_at DESC,id DESC LIMIT 1`, rid).Scan(&prompt.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return out, err
+	}
+	if prompt.ID != "" {
+		prompt, err = scanPrompt(tx.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM run_prompts p JOIN runs r ON r.id=p.run_id WHERE p.id=? AND p.run_id=? FOR UPDATE`, prompt.ID, rid))
+		if err != nil {
+			return out, err
+		}
+		if (prompt.Status != "failed" && prompt.Status != "resuming") || prompt.Answer == "" || !prompt.ExpiresAt.After(time.Now()) {
+			return out, domain.ErrConflict
+		}
+		snapshot, err := readRunSnapshotTx(ctx, tx, prompt.ID, rid)
+		if err != nil {
+			return out, err
+		}
+		if err = validatePromptSnapshot(snapshot, uid, wid, sid, rid, out.Query, out.DocumentIDs, prompt); err != nil {
+			return out, err
+		}
+		out.Prompt, err = nativeAnsweredPrompt(prompt, uid, wid, sid, rid, snapshot, prompt.Answer)
+		if err != nil {
+			return out, err
+		}
+		out.promptID = prompt.ID
+	}
+	return out, nil
 }
 
 // RecoverRun claims only interrupted, journaled execution; canceled, timed out,
@@ -338,66 +438,14 @@ func (s *Store) RecoverRun(ctx context.Context, uid, wid, sid, rid string, lease
 		if err = assertRunExecutionTx(ctx, tx, rid); err != nil {
 			return err
 		}
-		if status != "failed" || (code != "lease_expired" && code != "agent_failed" && code != "interrupted") {
-			return domain.ErrConflict
-		}
-		var active bool
-		if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM runs WHERE session_id=? AND id<>? AND status IN ('running','suspended'))`, sid, rid).Scan(&active); err != nil {
-			return err
-		}
-		if active {
-			return domain.ErrConflict
-		}
-		var seq uint64
-		if err = tx.QueryRowContext(ctx, `SELECT execution_generation,seq FROM run_journal_heads WHERE run_id=? FOR UPDATE`, rid).Scan(&out.Generation, &seq); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return domain.ErrConflict
-			}
-			return err
-		}
-		if seq == 0 {
-			return domain.ErrConflict
-		}
-		out.DocumentIDs, err = runDocumentScopeTx(ctx, tx, rid)
+		plan, err := prepareRunRecoveryTx(ctx, tx, uid, wid, sid, rid, status, code)
 		if err != nil {
 			return err
 		}
-		// Restore the immutable backend scope, including selected libraries that
-		// have not produced any tool result yet.
-		if err = validateRunScopeForResumeTx(ctx, tx, wid, rid, out.DocumentIDs); err != nil {
-			return err
-		}
-		valid, err := runSourcesValidTx(ctx, tx, wid, rid, out.DocumentIDs)
-		if err != nil {
-			return err
-		}
-		if !valid {
-			return domain.ErrConflict
-		}
-		if err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&out.Query); err != nil {
-			return err
-		}
-		var prompt domain.RunPrompt
-		if err = tx.QueryRowContext(ctx, `SELECT id FROM run_prompts WHERE run_id=? AND status IN ('resuming','failed') AND answer<>'' ORDER BY created_at DESC,id DESC LIMIT 1`, rid).Scan(&prompt.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		if prompt.ID != "" {
-			prompt, err = scanPrompt(tx.QueryRowContext(ctx, `SELECT `+promptColumns+` FROM run_prompts p JOIN runs r ON r.id=p.run_id WHERE p.id=? AND p.run_id=? FOR UPDATE`, prompt.ID, rid))
-			if err != nil {
-				return err
-			}
-			if (prompt.Status != "failed" && prompt.Status != "resuming") || prompt.Answer == "" || !prompt.ExpiresAt.After(time.Now()) {
-				return domain.ErrConflict
-			}
-			snapshot, err := readRunSnapshotTx(ctx, tx, prompt.ID, rid)
-			if err != nil {
-				return err
-			}
-			out.Prompt, err = nativeAnsweredPrompt(prompt, uid, wid, sid, rid, snapshot, prompt.Answer)
-			if err != nil {
-				return err
-			}
-			if _, err = tx.ExecContext(ctx, `UPDATE run_prompts SET status='resuming' WHERE id=?`, prompt.ID); err != nil {
+		plan.Role = out.Role
+		out = plan.RecoveredRun
+		if plan.promptID != "" {
+			if _, err = tx.ExecContext(ctx, `UPDATE run_prompts SET status='resuming' WHERE id=?`, plan.promptID); err != nil {
 				return err
 			}
 		}

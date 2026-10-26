@@ -90,6 +90,7 @@ func (s *server) run(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	data.CanRecover = data.CanRecover && s.agent != nil
 	respond(w, 200, data)
 }
 

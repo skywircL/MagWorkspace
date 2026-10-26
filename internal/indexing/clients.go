@@ -31,6 +31,7 @@ type Embedder interface {
 }
 
 type SearchStore interface {
+	StorageID() string
 	Ensure(context.Context, string, int) error
 	Upsert(context.Context, string, string, string, []domain.IndexChunk, [][]float32) error
 	Search(context.Context, string, string, []string, string, []float32, string, int) ([]domain.IndexCandidate, error)
@@ -242,6 +243,10 @@ func hexID(value string, length int) bool {
 }
 
 type elasticClient struct{ http *providerHTTP }
+
+func (e *elasticClient) StorageID() string {
+	return domain.StorageBindingID("elasticsearch", e.http.base.String(), "mw_")
+}
 
 func NewSearchStore(baseURL, apiKey string) (SearchStore, error) {
 	client, err := newProviderHTTP(baseURL, apiKey, "index", 60*time.Second)

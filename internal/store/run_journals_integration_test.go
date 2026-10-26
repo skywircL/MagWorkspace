@@ -240,7 +240,7 @@ func TestMySQLRunJournalAnsweredPromptRecoveryPreservesAnswer(t *testing.T) {
 	gen, err := s.BeginRunJournal(ctx, u.ID, w.ID, ss.ID, r.ID)
 	must(t, err)
 	appendJournal(t, s, ctx, u, w, ss, r, gen, journalRecord(1, "", strings.Repeat("f", 64)))
-	in := promptInput(t)
+	in := promptInputForRun(t, s, u.ID, w.ID, ss.ID, r.ID)
 	_, err = s.SuspendRun(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, "demo", in)
 	must(t, err)
 	resumed, err := s.ResumePrompt(ctx, u.ID, w.ID, ss.ID, r.ID, in.ID, "国内", time.Minute)
@@ -304,7 +304,7 @@ func TestMySQLRunJournalRejectsStaleGenerationWithoutObjectStorage(t *testing.T)
 	if next.Generation != recovered.Generation+1 {
 		t.Fatal("stale recovery context claimed or changed execution generation")
 	}
-	in := promptInput(t)
+	in := promptInputForRun(t, s, u.ID, w.ID, ss.ID, r.ID)
 	_, err = s.SuspendRun(WithRunExecution(ctx, r.ID, next.Generation), u.ID, w.ID, ss.ID, r.ID, "demo", in)
 	must(t, err)
 	_, err = s.ResumePrompt(WithRunExecution(ctx, r.ID, gen), u.ID, w.ID, ss.ID, r.ID, in.ID, "stale answer", time.Minute)

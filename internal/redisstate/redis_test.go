@@ -72,38 +72,6 @@ func TestRedisQueueDedupAndLoss(t *testing.T) {
 		t.Fatal(id, err)
 	}
 }
-func TestRedisEventsBoundedReplayAndDedup(t *testing.T) {
-	c := testClient(t)
-	ctx := context.Background()
-	for i := uint64(1); i <= EventLimit+1; i++ {
-		if err := c.AppendEvent(ctx, "run", 1, i, "message.delta", []byte(`{"delta":"x"}`)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := c.AppendEvent(ctx, "run", 1, EventLimit+1, "message.delta", []byte(`{"delta":"x"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.AppendEvent(ctx, "run", 1, EventLimit+1, "message.delta", []byte(`{"delta":"changed"}`)); err == nil {
-		t.Fatal("conflicting duplicate accepted")
-	}
-	if _, err := c.Events(ctx, "run", 1, 0); err != ErrHistory {
-		t.Fatal("trimmed history", err)
-	}
-	rows, err := c.Events(ctx, "run", 1, EventLimit)
-	if err != nil || len(rows) != 1 || rows[0].Sequence != EventLimit+1 {
-		t.Fatal(rows, err)
-	}
-	if _, err := c.Events(ctx, "run", 2, 0); err != ErrHistory {
-		t.Fatal("cross generation", err)
-	}
-	if ttl := c.r.TTL(ctx, c.eventKey("run", 1)).Val(); ttl <= 0 || ttl > stateTTL {
-		t.Fatal("unbounded retention", ttl)
-	}
-	c.r.Del(ctx, c.eventKey("run", 1))
-	if _, err := c.Events(ctx, "run", 1, 1); err != ErrHistory {
-		t.Fatal("expired", err)
-	}
-}
 func TestRedisProgressGenerationAndUnavailable(t *testing.T) {
 	c := testClient(t)
 	ctx := context.Background()

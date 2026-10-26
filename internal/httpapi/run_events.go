@@ -9,18 +9,18 @@ import (
 	"time"
 
 	"magworkspace/internal/domain"
-	"magworkspace/internal/redisstate"
+	"magworkspace/internal/stream"
 )
 
 // GET is read-only: reconnecting never claims a run or executes the Agent.
 func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 	uid, wid, sid, rid := userID(r), r.PathValue("workspaceID"), r.PathValue("sessionID"), r.PathValue("runID")
-	run, generation, err := s.db.RunEventState(r.Context(), uid, wid, sid, rid)
+	_, generation, err := s.db.RunEventState(r.Context(), uid, wid, sid, rid)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	if s.cfg.Redis == nil || !canFlush(w) {
+	if !canFlush(w) {
 		problem(w, 503, "events_unavailable", "event replay is unavailable; inspect the run")
 		return
 	}
@@ -44,19 +44,25 @@ func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		after = seq
 	}
+	s.subscribeEvents(w, r, uid, wid, stream.Key{SessionID: sid, RunID: rid, Generation: generation}, after)
+}
+
+func (s *server) subscribeEvents(w http.ResponseWriter, r *http.Request, uid, wid string, key stream.Key, after uint64) {
+	sid, rid, generation := key.SessionID, key.RunID, key.Generation
 	writer := &eventWriter{w: w, controller: http.NewResponseController(w), timeout: s.cfg.SSEWriteTimeout}
 	started := false
-	deadline := time.NewTimer(s.cfg.RunTimeout)
+	terminalEmpty := false
+	deadline := time.NewTimer(s.cfg.RunTimeout + 10*time.Second)
 	defer deadline.Stop()
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	heartbeat := time.Now()
 	for {
-		events, e := s.cfg.Redis.Events(r.Context(), rid, generation, after)
+		events, _, e := s.cfg.Streams.GetEvents(r.Context(), key, after)
 		if e != nil {
 			if started {
 				_ = writer.event("stream.unavailable", map[string]string{"code": "events_unavailable"})
-			} else if errors.Is(e, redisstate.ErrHistory) {
+			} else if errors.Is(e, stream.ErrHistory) {
 				problem(w, 409, "event_history_expired", "event history is incomplete; inspect the run")
 			} else {
 				problem(w, 503, "events_unavailable", "event replay is unavailable; inspect the run")
@@ -75,7 +81,7 @@ func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		run = current
+		run := current
 		if !started {
 			w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 			w.Header().Set("Cache-Control", "no-cache, no-store")
@@ -83,11 +89,11 @@ func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 			started = true
 		}
 		for _, event := range events {
-			if writer.write(fmt.Sprintf("id: %d:%d\nevent: %s\ndata: %s\n\n", generation, event.Sequence, event.Name, event.Data)) != nil {
+			if writer.write(fmt.Sprintf("id: %d:%d\nevent: %s\ndata: %s\n\n", generation, event.Sequence, event.Type, event.Data)) != nil {
 				return
 			}
 			after = event.Sequence
-			if event.Name == "run.completed" || event.Name == "run.failed" || event.Name == "run.suspended" {
+			if event.Type == "run.completed" || event.Type == "run.failed" || event.Type == "run.suspended" {
 				return
 			}
 		}
@@ -96,7 +102,15 @@ func (s *server) runEvents(w http.ResponseWriter, r *http.Request) {
 		}
 		// Terminal DB state can precede cache publication. A snapshot is explicit;
 		// it never manufactures a cached answer or declares missing deltas complete.
-		if run.Status != "running" && len(events) == 0 {
+		live, e := s.cfg.Streams.GetLiveRun(r.Context(), sid)
+		publishing := e == nil && live.RunID == rid && live.Generation == generation
+		if run.Status != "running" && len(events) == 0 && !publishing {
+			// ClearLiveRun follows terminal publication. Re-read once after observing
+			// cleanup so a cache read just before publication cannot hide that event.
+			if !terminalEmpty {
+				terminalEmpty = true
+				continue
+			}
 			_ = writer.event("stream.closed", map[string]any{"run": run})
 			return
 		}

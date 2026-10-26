@@ -80,6 +80,10 @@ func run() error {
 			slog.Warn("Redis unavailable; durable index and memory intents wait for queue recovery; event replay disabled until recovery")
 		}
 	}
+	streams, err := configureStreams(redisClient)
+	if err != nil {
+		return err
+	}
 	indexConfig, err := configureIndexing()
 	if err != nil {
 		return err
@@ -99,6 +103,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	var cleanupSearch indexing.SearchStore
+	if indexConfig != nil {
+		cleanupSearch = indexConfig.search
+	}
+	objectTargets, vectorTargets, err := configureCleanupTargets(objects, cleanupSearch)
+	if err != nil {
+		return err
+	}
 	startup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err = objects.Ensure(startup); err != nil {
@@ -111,6 +123,7 @@ func run() error {
 	}
 	defer db.Close()
 	db.SetObjectStorage(objects)
+	db.SetObjectCleanupStorages(objectTargets)
 	if err = db.SetUploadLimit(uploadLimit); err != nil {
 		return err
 	}
@@ -141,6 +154,9 @@ func run() error {
 	} else {
 		close(workersDone)
 	}
+	vectorCleanupDone := make(chan struct{})
+	vectorCleaner := indexing.NewCleaner(db, vectorTargets)
+	go func() { defer close(vectorCleanupDone); vectorCleaner.Run(workerCtx) }()
 	memoryDone := make(chan struct{})
 	extractor, _ := client.(agent.MemoryExtractor)
 	memoryOptions.Telemetry = telemetry
@@ -173,6 +189,11 @@ func run() error {
 			slog.Warn("memory worker shutdown deadline exceeded")
 		}
 		select {
+		case <-vectorCleanupDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("vector cleanup shutdown deadline exceeded")
+		}
+		select {
 		case <-objectsDone:
 		case <-time.After(5 * time.Second):
 			slog.Warn("object cleanup shutdown deadline exceeded")
@@ -188,7 +209,15 @@ func run() error {
 		return err
 	}
 	defer stopMetrics()
-	srv := &http.Server{Addr: env("HTTP_ADDR", "127.0.0.1:8080"), Handler: httpapi.New(db, client, httpapi.Config{Redis: redisClient, AllowRegistration: registration, RunTimeout: timeout, Indexing: indexes, Telemetry: telemetry}), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: max(timeout+15*time.Second, 45*time.Second), IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, BaseContext: func(net.Listener) context.Context { return shutdown }}
+	handler := httpapi.New(db, client, httpapi.Config{Streams: streams, BackgroundContext: shutdown, Redis: redisClient, AllowRegistration: registration, RunTimeout: timeout, Indexing: indexes, Telemetry: telemetry})
+	defer func() {
+		ctx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if handler.Shutdown(ctx) != nil {
+			slog.Warn("stream worker shutdown deadline exceeded")
+		}
+	}()
+	srv := &http.Server{Addr: env("HTTP_ADDR", "127.0.0.1:8080"), Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: max(timeout+15*time.Second, 45*time.Second), IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10, BaseContext: func(net.Listener) context.Context { return shutdown }}
 	serveErr := make(chan error, 1)
 	go func() {
 		slog.Info("MagWorkspace listening", "addr", srv.Addr, "agent_mode", env("MAGENT_MODE", "disabled"))

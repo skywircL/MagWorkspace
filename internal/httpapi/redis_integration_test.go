@@ -39,6 +39,7 @@ func TestHTTPRedisIndexDispatchProgressRecovery(t *testing.T) {
 	x.server.Close()
 	x.service = indexing.NewService(x.store, x.parser, x.embedder, x.search, x.objects, x.profile, indexing.Options{Redis: c, JobTimeout: 10 * time.Second})
 	x.config.Redis = c
+	x.config.Streams = c.StreamManager()
 	x.config.Indexing = x.service
 	x.server = httptest.NewServer(httpapi.New(x.store, x.agent, x.config))
 	auth := x.register(t, "redis-index")
@@ -105,6 +106,7 @@ func TestHTTPRedisSSEReplayPrivateGenerationAndSources(t *testing.T) {
 	auth := integrationAuth{} // register after replacing the server
 	client := &sseIntegrationAgent{}
 	x.config.Redis = c
+	x.config.Streams = c.StreamManager()
 	x.server = httptest.NewServer(httpapi.New(x.store, client, x.config))
 	auth = x.register(t, "redis-stream")
 	other := x.register(t, "redis-stream-other")
@@ -189,6 +191,7 @@ func TestHTTPRedisSSELiveSubscriptionOutage(t *testing.T) {
 	x := newIndexFixture(t)
 	x.server.Close()
 	release := make(chan struct{})
+	canceled := make(chan struct{})
 	var once sync.Once
 	finish := func() { once.Do(func() { close(release) }) }
 	t.Cleanup(finish)
@@ -198,12 +201,14 @@ func TestHTTPRedisSSELiveSubscriptionOutage(t *testing.T) {
 		}
 		select {
 		case <-ctx.Done():
+			close(canceled)
 			return agent.Result{}, ctx.Err()
 		case <-release:
 		}
 		return agent.Result{RunID: req.RunID, Answer: "completed during outage", Mode: "demo"}, nil
 	}}
 	x.config.Redis = c
+	x.config.Streams = c.StreamManager()
 	x.server = httptest.NewServer(httpapi.New(x.store, client, x.config))
 	auth := x.register(t, "redis-live")
 	session := x.session(t, auth, auth.Workspaces[0].ID, "Live subscription")
@@ -225,10 +230,15 @@ func TestHTTPRedisSSELiveSubscriptionOutage(t *testing.T) {
 	// A second subscriber disconnects; it must not cancel the original owner.
 	res.Body.Close()
 	c.Close()
-	finish()
-	terminal := post.next(t, "run.completed")
-	if terminal.Answer != "completed during outage" {
-		t.Fatal(terminal)
+	post.next(t, "stream.unavailable")
+	select {
+	case <-canceled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("outage left worker running")
+	}
+	run := waitStreamRun(t, x.integrationFixture, auth.Token, sessionPath(session)+"/runs/"+started.RunID, "failed")
+	if run.ErrorCode != "stream_unavailable" {
+		t.Fatal(run)
 	}
 	x.request(t, "GET", path, auth.Token, nil, 503)
 	_, streams, runs := client.calls()

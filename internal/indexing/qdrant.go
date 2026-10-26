@@ -19,6 +19,10 @@ type qdrantClient struct {
 	avgLen float64
 }
 
+func (q *qdrantClient) StorageID() string {
+	return domain.StorageBindingID("qdrant", q.http.base.String(), "mw_")
+}
+
 func NewQdrant(baseURL, apiKey string, avgLen float64) (SearchStore, error) {
 	if math.IsNaN(avgLen) || math.IsInf(avgLen, 0) || avgLen < 1 || avgLen > 65536 {
 		return nil, qdrantInvalid()
@@ -45,6 +49,10 @@ func pointID(chunk string) string {
 }
 func qdrantInvalid() error     { return &Failure{Code: "qdrant_invalid"} }
 func qdrantUnavailable() error { return &Failure{Code: "qdrant_unavailable"} }
+
+func qdrantPayloadFields() []string {
+	return []string{"workspace_id", "generation_id", "knowledge_base_id", "document_id", "version_id"}
+}
 
 func (q *qdrantClient) collection(ctx context.Context, profile string, dimensions int) (bool, map[string]string, error) {
 	status, body, err := q.http.call(ctx, http.MethodGet, collectionPath(profile), nil, nil)
@@ -91,7 +99,7 @@ func (q *qdrantClient) collection(ctx context.Context, profile string, dimension
 	for k, v := range response.Result.Payload {
 		fields[k] = v.Type
 	}
-	for _, name := range []string{"workspace_id", "generation_id"} {
+	for _, name := range qdrantPayloadFields() {
 		if fields[name] != "" && fields[name] != "keyword" {
 			return false, nil, qdrantInvalid()
 		}
@@ -131,7 +139,7 @@ func (q *qdrantClient) Ensure(ctx context.Context, profile string, dimensions in
 		}
 	}
 	// Repair interrupted payload-index creation even when the collection exists.
-	for _, name := range []string{"workspace_id", "generation_id"} {
+	for _, name := range qdrantPayloadFields() {
 		if fields[name] == "keyword" {
 			continue
 		}
@@ -147,8 +155,13 @@ func (q *qdrantClient) Ensure(ctx context.Context, profile string, dimensions in
 	if err != nil {
 		return err
 	}
-	if !exists || fields["workspace_id"] != "keyword" || fields["generation_id"] != "keyword" {
+	if !exists {
 		return qdrantInvalid()
+	}
+	for _, name := range qdrantPayloadFields() {
+		if fields[name] != "keyword" {
+			return qdrantInvalid()
+		}
 	}
 	return nil
 }
@@ -169,10 +182,13 @@ func qdrantCompleted(status int, body []byte) error {
 }
 
 type pointPayload struct {
-	ChunkID      string `json:"chunk_id"`
-	IndexID      string `json:"index_id"`
-	WorkspaceID  string `json:"workspace_id"`
-	GenerationID string `json:"generation_id"`
+	ChunkID         string `json:"chunk_id"`
+	IndexID         string `json:"index_id"`
+	WorkspaceID     string `json:"workspace_id"`
+	GenerationID    string `json:"generation_id"`
+	KnowledgeBaseID string `json:"knowledge_base_id"`
+	DocumentID      string `json:"document_id"`
+	VersionID       string `json:"version_id"`
 }
 
 func (q *qdrantClient) Upsert(ctx context.Context, profile, generation, workspace string, chunks []domain.IndexChunk, vectors [][]float32) error {
@@ -181,7 +197,9 @@ func (q *qdrantClient) Upsert(ctx context.Context, profile, generation, workspac
 	}
 	seen := map[string]bool{}
 	for i, c := range chunks {
-		if strings.TrimSpace(c.Content) == "" || !utf8.ValidString(c.Content) || len(c.Content) > 64<<10 || !hexID(c.ID, 32) || !hexID(c.IndexID, 32) || c.IndexID != chunks[0].IndexID || seen[c.ID] || !validVector(vectors[i]) || len(vectors[i]) > maxSearchDimensions || len(vectors[i]) != len(vectors[0]) {
+		if strings.TrimSpace(c.Content) == "" || !utf8.ValidString(c.Content) || len(c.Content) > 64<<10 || !hexID(c.ID, 32) || !hexID(c.IndexID, 32) || c.IndexID != chunks[0].IndexID || seen[c.ID] || !validVector(vectors[i]) || len(vectors[i]) > maxSearchDimensions || len(vectors[i]) != len(vectors[0]) ||
+			c.WorkspaceID != workspace || c.Generation != generation || !hexID(c.KnowledgeBaseID, 32) || !hexID(c.DocumentID, 32) || !hexID(c.VersionID, 32) ||
+			c.KnowledgeBaseID != chunks[0].KnowledgeBaseID || c.DocumentID != chunks[0].DocumentID || c.VersionID != chunks[0].VersionID {
 			return qdrantInvalid()
 		}
 		seen[c.ID] = true
@@ -191,7 +209,9 @@ func (q *qdrantClient) Upsert(ctx context.Context, profile, generation, workspac
 		points := make([]any, 0, end-start)
 		for i := start; i < end; i++ {
 			c := chunks[i]
-			points = append(points, map[string]any{"id": pointID(c.ID), "vector": map[string]any{"dense": vectors[i], "bm25": q.bm25(c.Content)}, "payload": pointPayload{c.ID, c.IndexID, workspace, generation}})
+			payload := pointPayload{ChunkID: c.ID, IndexID: c.IndexID, WorkspaceID: workspace, GenerationID: generation,
+				KnowledgeBaseID: c.KnowledgeBaseID, DocumentID: c.DocumentID, VersionID: c.VersionID}
+			points = append(points, map[string]any{"id": pointID(c.ID), "vector": map[string]any{"dense": vectors[i], "bm25": q.bm25(c.Content)}, "payload": payload})
 		}
 		status, body, err := q.http.call(ctx, http.MethodPut, collectionPath(profile)+"/points", map[string]any{"points": points}, url.Values{"wait": {"true"}})
 		if err != nil {
@@ -268,6 +288,9 @@ func (q *qdrantClient) Search(ctx context.Context, profile, workspace string, ge
 			return nil, qdrantInvalid()
 		}
 		seen[p.ChunkID] = true
+		// Ownership metadata is advisory: older points omit it and document
+		// ownership can change. Only SQL rehydration supplies trusted ownership;
+		// workspace and the authorized published generations remain mandatory.
 		// Cosine [-1,1] becomes the API's nonnegative similarity [0,1]. RRF
 		// depends only on rank; tiny float accumulation overshoots are clamped.
 		score := *hit.Score
@@ -287,7 +310,8 @@ func (q *qdrantClient) DeleteGeneration(ctx context.Context, profile, generation
 	if err != nil {
 		return err
 	}
-	// Old Elasticsearch-only profiles never had a Qdrant collection.
+	// The cleaner resolves the original storage binding before calling this.
+	// An absent collection on that store has no remaining generation to delete.
 	if status == http.StatusNotFound {
 		return nil
 	}

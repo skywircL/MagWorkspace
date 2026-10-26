@@ -5,12 +5,14 @@ cd "$(dirname "$0")/.."
 stack="mw-index-test-$(python3 -c 'import secrets; print(secrets.token_hex(5))')"
 envfile=$(mktemp)
 override=$(mktemp)
-chmod 600 "$envfile" "$override"
+cleanup_state=$(mktemp)
+chmod 600 "$envfile" "$override" "$cleanup_state"
 python3 - "$envfile" <<'PY'
 import secrets, sys
 values={"MYSQL_PASSWORD":secrets.token_hex(24),"MYSQL_ROOT_PASSWORD":secrets.token_hex(24),
         "MINIO_ACCESS_KEY":secrets.token_hex(12),"MINIO_SECRET_KEY":secrets.token_hex(24),
         "MAGENT_SERVICE_API_KEY":secrets.token_hex(32),"MINIO_BUCKET":"magworkspace","MAGENT_MODE":"demo","MAGENT_API_KEY":"","QDRANT_API_KEY":secrets.token_hex(24),"REDIS_PASSWORD":secrets.token_hex(24),
+        "CLEANUP_QDRANT_STORES":"[]","CLEANUP_MINIO_STORES":"[]",
         "RERANK_ENABLED":"false","DOCUMENT_INDEXING_ENABLED":"true","CHUNKING_STRATEGY":"parent_child_v1","EMBEDDING_MODEL":"bge-m3:567m","EMBEDDING_DIMENSIONS":"1024"}
 for key in ("MAGENT_SERVICE_PORT", "REDIS_PORT", "MYSQL_PORT","MINIO_PORT","MINIO_CONSOLE_PORT","HTTP_PORT","SEARCH_PORT","QDRANT_PORT","OLLAMA_PORT","TIKA_PORT"):
     values[key]="0"
@@ -57,7 +59,7 @@ with open(sys.argv[1], "a") as output:
 PY
 fi
 compose() { docker compose --env-file "$envfile" --project-name "$stack" --profile app -f compose.yaml -f "$override" "$@"; }
-cleanup() { compose down --volumes --remove-orphans >/dev/null 2>&1 || true; rm -f "$envfile" "$override"; }
+cleanup() { compose down --volumes --remove-orphans >/dev/null 2>&1 || true; rm -f "$envfile" "$override" "$cleanup_state"; }
 trap cleanup EXIT HUP INT TERM
 compose config --quiet
 docker volume create "$model_cache" >/dev/null
@@ -86,3 +88,17 @@ go test ./internal/blob ./internal/indexing -run '^(TestMinIOLive|TestParserReal
 python3 scripts/smoke-indexing.py "http://127.0.0.1:$port"
 
 python3 scripts/smoke-redis.py "http://127.0.0.1:$port"
+
+# Exercise resource disposal through the packaged server after index generation
+# is disabled. Only this disposable project's synthetic resource is adjusted.
+python3 scripts/smoke-cleanup.py prepare --base-url "http://127.0.0.1:$port" --project "$stack" --env-file "$envfile" --compose-file compose.yaml --compose-file "$override" --state "$cleanup_state"
+export DOCUMENT_INDEXING_ENABLED=false
+compose up -d --no-build --no-deps backend
+port=$(compose port backend 8080 | sed 's/.*://')
+tries=0
+until curl --fail --silent "http://127.0.0.1:$port/readyz" >/dev/null; do
+ tries=$((tries+1))
+ if [ "$tries" -ge 60 ]; then echo 'Cleanup-only backend did not become ready' >&2; exit 1; fi
+ sleep 1
+done
+python3 scripts/smoke-cleanup.py verify --base-url "http://127.0.0.1:$port" --project "$stack" --env-file "$envfile" --compose-file compose.yaml --compose-file "$override" --state "$cleanup_state" --expect-indexing false

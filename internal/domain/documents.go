@@ -34,6 +34,7 @@ type DocumentVersion struct {
 	CreatedBy  string    `json:"created_by"`
 	CreatedAt  time.Time `json:"created_at"`
 	ObjectKey  string    `json:"-"`
+	StorageID  string    `json:"-"`
 }
 
 type DocumentWrite struct {

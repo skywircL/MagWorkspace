@@ -198,12 +198,12 @@ sys.exit(bridge.main())
 					assertJournalResponsePrivate(t, raw)
 					terminals := 0
 					for _, block := range strings.Split(string(raw), "\n\n") {
-						if strings.HasPrefix(block, "event: run.failed\n") {
+						if strings.Contains(block, "event: run.failed\n") {
 							t.Fatalf("recovery failed: %s", raw)
 						}
-						if strings.HasPrefix(block, "event: run.completed\n") {
+						if _, data, ok := strings.Cut(block, "event: run.completed\ndata: "); ok {
 							terminals++
-							if err := json.Unmarshal([]byte(strings.TrimPrefix(block, "event: run.completed\ndata: ")), &completed); err != nil {
+							if err := json.Unmarshal([]byte(data), &completed); err != nil {
 								t.Fatal(err)
 							}
 						}

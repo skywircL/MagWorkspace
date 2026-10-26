@@ -609,6 +609,20 @@ async function loadMemories() {
     row.append(body, actions); $("memory-list").append(row);
   }
 }
+function memoryExpiryLocalValue(seconds) {
+  const d = new Date(seconds * 1000), pad = (value, width = 2) => String(value).padStart(width, "0");
+  return `${pad(d.getFullYear(), 4)}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+    + (d.getMilliseconds() ? "." + pad(d.getMilliseconds(), 3) : "");
+}
+function memoryExpirySeconds(input) {
+  // datetime-local accepts five-digit years that Date's ISO parser rejects.
+  // Its numeric value represents the local fields as UTC; apply those fields
+  // in the browser's timezone to recover the actual expiry instant.
+  const fields = new Date(input.valueAsNumber), d = new Date(0);
+  d.setFullYear(fields.getUTCFullYear(), fields.getUTCMonth(), fields.getUTCDate());
+  d.setHours(fields.getUTCHours(), fields.getUTCMinutes(), fields.getUTCSeconds(), fields.getUTCMilliseconds());
+  return d.getTime() / 1000;
+}
 function memoryEditor(item) {
   if (!item || item.status !== "active") return;
   const base = wp(), body = showDetail("纠正个人记忆"), formNode = node("form");
@@ -622,15 +636,15 @@ function memoryEditor(item) {
   const content = field("content", "记忆内容（最多 500 字）", node("textarea")); content.rows = 4; content.required = true; content.maxLength = 500; content.value = item.content;
   const topic = field("topic", "主题（可选，同主题新内容替代旧记忆）", node("input")); topic.maxLength = 500; topic.value = item.topic || "";
   const importance = field("importance", "重要度（1–5）", node("input")); importance.type = "number"; importance.min = "1"; importance.max = "5"; importance.required = true; importance.value = String(item.importance);
-  const expiry = field("expiry", "到期时间（可选，使用本地时间）", node("input")); expiry.type = "datetime-local";
-  if (item.expires_at) { const d = new Date(item.expires_at * 1000); expiry.value = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
+  const expiry = field("expiry", "到期时间（可选，使用本地时间）", node("input")); expiry.type = "datetime-local"; expiry.step = "any";
+  if (item.expires_at != null) expiry.value = memoryExpiryLocalValue(item.expires_at);
   formNode.append(node("p", "纠正不准确或已变化的内容，修改会保留替代历史。记忆不会授予文档访问权限。", "muted"));
   const save = node("button", "保存纠正", "primary"); save.type = "submit"; formNode.append(save);
   formNode.addEventListener("submit", (event) => {
     event.preventDefault();
     act(async () => {
       if (base !== wp()) throw Error("工作空间已变化，请重新打开记忆。");
-      const expires = expiry.value ? new Date(expiry.value).getTime() / 1000 : null;
+      const expires = expiry.value ? memoryExpirySeconds(expiry) : null;
       if (expires !== null && (!Number.isFinite(expires) || expires <= Date.now() / 1000)) throw Error("到期时间必须晚于现在。");
       await api(base + "/memories/" + enc(item.id), "PUT", {
         kind: kind.value, content: content.value, topic: topic.value,
@@ -1519,12 +1533,12 @@ async function inspectRun() {
   if (!state.rid) return;
   const run = await api(rp());
   state.runStatus = run.status;
-  const recoverable = run.status === "failed" && ["agent_failed", "interrupted", "lease_expired"].includes(run.error_code);
+  const recoverable = run.status === "failed" && run.can_recover === true;
   const status = node("section", undefined, "run-notice " + (run.status === "failed" ? "run-failed" : ""));
   $("run-state").replaceChildren();
   if (run.status !== "completed") {
     const labels = {
-      running: ["Agent 正在处理问题", "本次运行沿用发送时的知识库范围。刷新状态可查看最新结果，请勿重复发送。"],
+      running: ["Agent 正在处理问题", "断开连接不会停止生成。可以重新接收输出，或显式停止本次运行。"],
       failed: [run.error_code === "agent_canceled" ? "生成已停止" : "这次回答尚未完成", recoverable
         ? "你的问题已保留。恢复将沿用原运行的知识库范围；也可调整范围后发送新问题。"
         : "你的问题已保留，可以继续发送新问题。"],
@@ -1537,6 +1551,10 @@ async function inspectRun() {
       details.append(node("summary", "错误详情"), node("code", run.error_code)); status.append(details);
     }
     $("run-state").append(status);
+  }
+  if (run.status === "running") {
+    status.append(button("继续接收输出", () => stream(rp() + "/events", {}, "GET"), "quiet"));
+    status.append(button("停止生成", async () => { await api(rp() + "/stop", "POST", {}); note("已请求停止，请稍后刷新状态。"); }, "danger"));
   }
   if (recoverable)
     status.append(
@@ -1686,9 +1704,10 @@ async function renderPrompt(p) {
     ),
   );
 }
-async function stream(path, data) {
+async function stream(path, data, method = "POST") {
   const epoch = authEpoch;
   state.controller = new AbortController();
+  state.stopPath = method === "GET" ? path.replace(/\/events$/, "/stop") : "";
   $("stop").hidden = false;
   $("draft").hidden = false;
   const draftHeader = node("header", undefined, "message-heading");
@@ -1715,18 +1734,21 @@ async function stream(path, data) {
   let terminal = false, accepted = false;
   try {
     const r = await request(path, {
-      method: "POST",
-      data,
+      method,
+      ...(method === "POST" ? { data } : {}),
       stream: true,
       signal: state.controller.signal,
     });
     accepted = true;
+    const runID = r.headers.get("X-Run-ID");
+    if (runID) { state.rid = runID; state.stopPath = rp() + "/stop"; }
     terminal = await consumeEvents(r.body, async (name, payload) => {
       if (epoch !== authEpoch) throw Error("登录状态已变化，请刷新页面");
       const scroller = document.querySelector(".conversation-scroll");
       const follow = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 100;
       if (name === "run.started") {
         state.rid = payload.run_id;
+        state.stopPath = rp() + "/stop";
         draftStatus.textContent = "正在准备回答…";
         if (data.content && !userShown) {
           $("messages").append(messageCard({ role: "user", content: data.content }));
@@ -1751,12 +1773,13 @@ async function stream(path, data) {
   } catch (e) {
     note(
       e.name === "AbortError"
-        ? "已停止生成，正在查询运行状态。"
+        ? "已断开输出连接，后台运行状态可重新查询。"
         : e.message + "；正在检查已保存状态。",
     );
   } finally {
     cancelAnimationFrame(paint);
     state.controller = null;
+    state.stopPath = "";
     $("stop").hidden = true;
     $("draft").hidden = true;
     $("draft").textContent = ""; // Always reconcile durable history after a delivery failure; never retry POST.
@@ -1764,7 +1787,14 @@ async function stream(path, data) {
   }
   return accepted;
 }
-$("stop").addEventListener("click", () => state.controller?.abort());
+$("stop").addEventListener("click", async () => {
+  const path = state.stopPath;
+  if (!path) { note("正在确认运行，请稍后停止。"); return; }
+  $("stop").disabled = true;
+  try { await api(path, "POST", {}); note("已请求停止，正在等待运行结束。"); }
+  catch (e) { note(e.message); }
+  finally { $("stop").disabled = false; }
+});
 form("chat-form", async () => {
   if (!state.sid) throw Error("请先创建或选择会话");
   if (["running", "suspended"].includes(state.runStatus)) throw Error("请先完成当前运行");

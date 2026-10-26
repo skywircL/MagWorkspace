@@ -268,9 +268,9 @@ func TestHTTPWorkspaceRealHarnessToolsSuspendRestartResumeCitation(t *testing.T)
 		if strings.Contains(block, "event: run.failed") || strings.Contains(block, "event: run.suspended") {
 			t.Fatalf("unexpected real resume terminal: %s", raw)
 		}
-		if strings.HasPrefix(block, "event: run.completed\n") {
+		if _, data, ok := strings.Cut(block, "event: run.completed\ndata: "); ok {
 			completedCount++
-			if err := json.Unmarshal([]byte(strings.TrimPrefix(block, "event: run.completed\ndata: ")), &completed); err != nil {
+			if err := json.Unmarshal([]byte(data), &completed); err != nil {
 				t.Fatalf("decode real resume terminal: %v; %s", err, block)
 			}
 		}

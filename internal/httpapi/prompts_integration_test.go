@@ -28,10 +28,28 @@ type promptHTTPResult struct {
 }
 
 func promptTestResult(req agent.Request, id string) agent.Result {
-	return agent.Result{RunID: req.RunID, Status: "suspended", Mode: "demo", Prompt: &agent.UserPrompt{
+	result := agent.Result{RunID: req.RunID, Status: "suspended", Mode: "demo", Prompt: &agent.UserPrompt{
 		ID: id, ToolCallID: "ask-" + id, Question: "你指的是国内还是海外差旅？", Options: []string{"国内", "海外"},
-		Snapshot: `{"opaque":"` + promptSnapshotTestSecret + `"}`, ExpiresAt: float64(time.Now().Add(time.Hour).Unix()),
+		ExpiresAt: float64(time.Now().Add(time.Hour).Unix()),
 	}}
+	result.Prompt.Snapshot = promptTestSnapshot(req, result.Prompt)
+	return result
+}
+
+func promptTestSnapshot(req agent.Request, prompt *agent.UserPrompt) string {
+	args, _ := json.Marshal(map[string]any{"question": prompt.Question, "options": prompt.Options})
+	var scope []string
+	if req.DocumentIDs != nil {
+		scope = *req.DocumentIDs
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"version": 2, "run_id": req.RunID, "session_id": req.SessionID, "query": req.Query, "memory_prompt": promptSnapshotTestSecret,
+		"caller":  map[string]string{"user_id": req.UserID, "workspace_id": req.WorkspaceID},
+		"scope":   map[string]any{"workspace_id": req.WorkspaceID, "document_ids": scope},
+		"policy":  map[string]string{"access": "read_only"},
+		"pending": map[string]any{"blocked_index": 0, "tool_calls": []any{map[string]string{"id": prompt.ToolCallID, "name": "ask_user", "arguments": string(args)}}},
+	})
+	return string(raw)
 }
 
 func promptPath(session domain.Session, runID, promptID string) string {

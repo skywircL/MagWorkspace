@@ -457,7 +457,7 @@ func TestHTTPHarnessServiceCommittedJournalSurvivesLostResponseAndRestart(t *tes
 	assertHarnessJournalFacts(t, x, runID, true)
 }
 
-func TestHTTPHarnessServiceSSEDisconnectCancelsProviderAndReleasesSlot(t *testing.T) {
+func TestHTTPHarnessServiceSSEStopAfterDisconnectCancelsProviderAndReleasesSlot(t *testing.T) {
 	x := newIndexFixture(t)
 	owner := x.register(t, "servicecancel")
 	session := x.session(t, owner, owner.Workspaces[0].ID, "服务取消")
@@ -487,8 +487,14 @@ func TestHTTPHarnessServiceSSEDisconnectCancelsProviderAndReleasesSlot(t *testin
 	connection.close()
 	select {
 	case <-providerClosed:
+		t.Fatal("browser disconnect canceled the actual Harness provider")
+	case <-time.After(150 * time.Millisecond):
+	}
+	x.request(t, "POST", sessionPath(session)+"/runs/"+started.RunID+"/stop", owner.Token, map[string]any{}, 202)
+	select {
+	case <-providerClosed:
 	case <-time.After(5 * time.Second):
-		t.Fatal("browser disconnect left the actual Harness provider request alive")
+		t.Fatal("explicit stop left the actual Harness provider request alive")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {

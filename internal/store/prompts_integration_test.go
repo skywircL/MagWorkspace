@@ -18,7 +18,22 @@ func promptInput(t *testing.T) domain.SuspendedPrompt {
 	t.Helper()
 	id, err := newID()
 	must(t, err)
-	return domain.SuspendedPrompt{ID: id, ToolCallID: "question-call", Question: "国内还是海外差旅？", Options: []string{"国内", "海外"}, Snapshot: `{"private":"snapshot bytes"}`, ExpiresAt: time.Now().Add(time.Hour)}
+	return domain.SuspendedPrompt{ID: id, ToolCallID: "question-call", Question: "国内还是海外差旅？", Options: []string{"国内", "海外"}, ExpiresAt: time.Now().Add(time.Hour)}
+}
+
+func promptInputForRun(t *testing.T, s *Store, uid, wid, sid, rid string) domain.SuspendedPrompt {
+	t.Helper()
+	in := promptInput(t)
+	ctx := context.Background()
+	tx, err := s.pool.BeginTx(ctx, nil)
+	must(t, err)
+	defer tx.Rollback()
+	var query string
+	must(t, tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&query))
+	scope, err := runDocumentScopeTx(ctx, tx, rid)
+	must(t, err)
+	in.Snapshot = string(encodePromptSnapshot(t, nativePromptSnapshot(t, uid, wid, sid, rid, query, scope, in)))
+	return in
 }
 
 func TestMySQLPromptsPersistResumeOnceAndHistory(t *testing.T) {
@@ -29,7 +44,7 @@ func TestMySQLPromptsPersistResumeOnceAndHistory(t *testing.T) {
 	must(t, err)
 	run, _, _, err := s.BeginRun(ctx, u.ID, w.ID, session.ID, "住宿标准", time.Minute, []string{})
 	must(t, err)
-	in := promptInput(t)
+	in := promptInputForRun(t, s, u.ID, w.ID, session.ID, run.ID)
 	p, err := s.SuspendRun(ctx, u.ID, w.ID, session.ID, run.ID, "demo", in)
 	must(t, err)
 	if p.Status != "pending" || p.Question != in.Question {
@@ -99,7 +114,7 @@ func TestMySQLPromptsCancelExpireRevokeAndIntegrity(t *testing.T) {
 		must(t, e)
 		r, _, _, e := s.BeginRun(ctx, uid, w.ID, ss.ID, "question", time.Minute)
 		must(t, e)
-		in := promptInput(t)
+		in := promptInputForRun(t, s, uid, w.ID, ss.ID, r.ID)
 		_, e = s.SuspendRun(ctx, uid, w.ID, ss.ID, r.ID, "demo", in)
 		must(t, e)
 		return ss, r, in
@@ -151,7 +166,7 @@ func TestMySQLPromptsAtomicDatabaseStorageAndCascade(t *testing.T) {
 	must(t, err)
 	_, err = s.pool.ExecContext(ctx, `CREATE TRIGGER reject_suspend BEFORE UPDATE ON runs FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='forced failure'`)
 	must(t, err)
-	in := promptInput(t)
+	in := promptInputForRun(t, s, u.ID, w.ID, ss.ID, r.ID)
 	if _, err = s.SuspendRun(ctx, u.ID, w.ID, ss.ID, r.ID, "demo", in); err == nil {
 		t.Fatal("database failure ignored")
 	}

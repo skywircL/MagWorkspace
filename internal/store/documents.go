@@ -15,7 +15,7 @@ import (
 )
 
 const documentColumns = `id,workspace_id,knowledge_base_id,title,current_version_id,created_by,created_at,updated_at`
-const documentVersionColumns = `id,document_id,version_number,filename,media_type,size_bytes,sha256,created_by,created_at,object_key`
+const documentVersionColumns = `id,document_id,version_number,filename,media_type,size_bytes,sha256,created_by,created_at,object_key,storage_id`
 
 func validDocumentText(value string) bool {
 	if !utf8.ValidString(value) || !validText(value, 255) {
@@ -51,7 +51,7 @@ func scanDocumentVersion(row rowScanner) (domain.DocumentVersion, error) {
 }
 
 func documentVersionDest(version *domain.DocumentVersion) []any {
-	return []any{&version.ID, &version.DocumentID, &version.Number, &version.Filename, &version.MediaType, &version.SizeBytes, &version.SHA256, &version.CreatedBy, &version.CreatedAt, &version.ObjectKey}
+	return []any{&version.ID, &version.DocumentID, &version.Number, &version.Filename, &version.MediaType, &version.SizeBytes, &version.SHA256, &version.CreatedBy, &version.CreatedAt, &version.ObjectKey, &version.StorageID}
 }
 
 // documentInWorkspace runs only after lockWorkspace. Including workspace and
@@ -63,16 +63,16 @@ func documentInWorkspace(ctx context.Context, tx *sql.Tx, workspaceID, documentI
 // insertDocumentVersion is the only application write to document_versions.
 // Metadata and its storage reference are inserted together; old versions are
 // never updated. Inline bytes are only retained for legacy fixtures.
-func insertDocumentVersion(ctx context.Context, tx *sql.Tx, userID, documentID, versionID string, number int, filename string, content []byte, objectKey string) (domain.DocumentVersion, error) {
+func insertDocumentVersion(ctx context.Context, tx *sql.Tx, userID, documentID, versionID string, number int, filename string, content []byte, object stagedDocumentObject) (domain.DocumentVersion, error) {
 	if content == nil {
 		content = []byte{}
 	}
 	digest := sha256.Sum256(content)
 	var inline any = content
-	if objectKey != "" {
+	if object.key != "" {
 		inline = nil
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO document_versions(id,document_id,version_number,filename,media_type,size_bytes,sha256,content,created_by,object_key) VALUES(?,?,?,?,?,?,?,?,?,?)`, versionID, documentID, number, filename, http.DetectContentType(content), len(content), hex.EncodeToString(digest[:]), inline, userID, objectKey)
+	_, err := tx.ExecContext(ctx, `INSERT INTO document_versions(id,document_id,version_number,filename,media_type,size_bytes,sha256,content,created_by,object_key,storage_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, versionID, documentID, number, filename, http.DetectContentType(content), len(content), hex.EncodeToString(digest[:]), inline, userID, object.key, object.storageID)
 	if err != nil {
 		return domain.DocumentVersion{}, err
 	}

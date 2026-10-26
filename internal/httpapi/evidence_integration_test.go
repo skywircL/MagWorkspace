@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -302,7 +303,16 @@ func TestHTTPRetrievalUncitedDeletedSourceCannotCommit(t *testing.T) {
 					t.Fatalf("unavailable uncited source committed: %+v", response.Error)
 				}
 			} else {
+				continueAgent := make(chan struct{})
+				var release sync.Once
+				releaseAgent := func() { release.Do(func() { close(continueAgent) }) }
+				defer releaseAgent()
 				client := &sseIntegrationAgent{stream: func(ctx context.Context, request agent.Request, emit func(agent.Event) error) (agent.Result, error) {
+					select {
+					case <-continueAgent:
+					case <-ctx.Done():
+						return agent.Result{}, ctx.Err()
+					}
 					result, err := finish(ctx, request)
 					if err != nil {
 						return result, err
@@ -316,11 +326,17 @@ func TestHTTPRetrievalUncitedDeletedSourceCannotCommit(t *testing.T) {
 				x.server = httptest.NewServer(httpapi.New(x.store, client, x.config))
 				connection := openSSETestConnection(t, x.integrationFixture, sessionPath(session)+"/messages", owner.Token, "住宿标准")
 				defer connection.close()
-				connection.next(t, "run.started")
-				connection.next(t, "message.start")
-				connection.next(t, "message.delta")
-				if failed := connection.next(t, "run.failed"); failed.Error.Code != "invalid_citation" {
-					t.Fatalf("uncited source produced wrong SSE terminal: %+v", failed)
+				started := connection.next(t, "run.started")
+				releaseAgent()
+				// Cache readers reauthorize before exposing any newly produced text.
+				unavailable := connection.next(t, "stream.unavailable")
+				if unavailable.Code != "access_or_execution_changed" {
+					t.Fatal(unavailable)
+				}
+				connection.ended(t)
+				run := waitStreamRun(t, x.integrationFixture, owner.Token, sessionPath(session)+"/runs/"+started.RunID, "failed")
+				if run.ErrorCode != "invalid_citation" {
+					t.Fatalf("uncited source was not rejected durably: %+v", run)
 				}
 			}
 			stored, _, err := x.store.Messages(context.Background(), owner.User.ID, session.WorkspaceID, session.ID, 50, 0)

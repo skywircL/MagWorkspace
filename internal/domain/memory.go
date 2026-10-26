@@ -2,8 +2,12 @@ package domain
 
 import "time"
 
+// MaxMemoryTimeSeconds is the exclusive UTC year-10000 boundary. Keep persisted
+// and public Unix seconds representable by database and browser calendar types.
+const MaxMemoryTimeSeconds = 253402300800
+
 // Memory is a personal statement, independent of Session history.
-// Timestamps use Unix seconds to match the Harness MemoryItem contract.
+// Public timestamps use Unix seconds to match the Harness MemoryItem contract.
 type Memory struct {
 	Origin          string   `json:"origin"`
 	SourceRunID     string   `json:"source_run_id"`

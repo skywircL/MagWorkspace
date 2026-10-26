@@ -76,6 +76,13 @@ func (s *Store) SuspendRun(ctx context.Context, uid, wid, sid, rid, mode string,
 		if !valid {
 			return domain.ErrInvalid
 		}
+		var query string
+		if err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&query); err != nil {
+			return err
+		}
+		if err = validatePromptSnapshot([]byte(in.Snapshot), uid, wid, sid, rid, query, scope, domain.RunPrompt{ToolCallID: in.ToolCallID, Question: in.Question, Options: in.Options, Approval: in.Approval}); err != nil {
+			return err
+		}
 		approval, err := prepareApprovalTx(ctx, tx, uid, wid, sid, rid, in)
 		if err != nil {
 			return err
@@ -227,6 +234,9 @@ func (s *Store) resumePrompt(ctx context.Context, uid, wid, sid, rid, pid, answe
 			}
 		}
 		if err = tx.QueryRowContext(ctx, `SELECT content FROM messages WHERE run_id=? AND role='user'`, rid).Scan(&out.Query); err != nil {
+			return err
+		}
+		if err = validatePromptSnapshot(raw, uid, wid, sid, rid, out.Query, out.DocumentIDs, prompt); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE run_prompts SET status='resuming',answer=?,resolved_at=UTC_TIMESTAMP(6) WHERE id=?`, answer, pid); err != nil {

@@ -19,11 +19,14 @@ import (
 )
 
 const (
-	testProfile    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	testGeneration = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	testWorkspace  = "cccccccccccccccccccccccccccccccc"
-	testIndex      = "dddddddddddddddddddddddddddddddd"
-	testChunk      = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	testProfile       = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testGeneration    = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	testWorkspace     = "cccccccccccccccccccccccccccccccc"
+	testIndex         = "dddddddddddddddddddddddddddddddd"
+	testChunk         = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	testKnowledgeBase = "11111111111111111111111111111111"
+	testDocument      = "22222222222222222222222222222222"
+	testVersion       = "33333333333333333333333333333333"
 )
 
 func requireClientError(t *testing.T, err error, code string) {
@@ -230,7 +233,9 @@ func testChunks(count int) ([]domain.IndexChunk, [][]float32) {
 	chunks := make([]domain.IndexChunk, count)
 	vectors := make([][]float32, count)
 	for i := range chunks {
-		chunks[i] = domain.IndexChunk{ID: fmt.Sprintf("%032x", i+1), IndexID: testIndex, Content: fmt.Sprintf("知识库合成片段 %d", i)}
+		chunks[i] = domain.IndexChunk{ID: fmt.Sprintf("%032x", i+1), IndexID: testIndex, Generation: testGeneration,
+			WorkspaceID: testWorkspace, KnowledgeBaseID: testKnowledgeBase, DocumentID: testDocument, VersionID: testVersion,
+			Content: fmt.Sprintf("知识库合成片段 %d", i)}
 		vectors[i] = []float32{1, float32(i + 1)}
 	}
 	return chunks, vectors

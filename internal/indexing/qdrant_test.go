@@ -18,9 +18,13 @@ import (
 )
 
 func qdrantSchema() map[string]any {
+	fields := map[string]any{}
+	for _, field := range []string{"workspace_id", "generation_id", "knowledge_base_id", "document_id", "version_id"} {
+		fields[field] = map[string]any{"data_type": "keyword"}
+	}
 	return map[string]any{"status": "ok", "result": map[string]any{
 		"config":         map[string]any{"params": map[string]any{"vectors": map[string]any{"dense": map[string]any{"size": 2, "distance": "Cosine", "datatype": "float32"}}, "sparse_vectors": map[string]any{"bm25": map[string]any{"modifier": "idf"}}}},
-		"payload_schema": map[string]any{"workspace_id": map[string]any{"data_type": "keyword"}, "generation_id": map[string]any{"data_type": "keyword"}},
+		"payload_schema": fields,
 	}}
 }
 func TestQdrantNativeRequests(t *testing.T) {
@@ -54,7 +58,8 @@ func TestQdrantNativeRequests(t *testing.T) {
 			}
 			for i, p := range points {
 				c := chunks[upserts+i]
-				if p.ID != pointID(c.ID) || p.Payload.ChunkID != c.ID || p.Payload.WorkspaceID != testWorkspace || p.Payload.GenerationID != testGeneration {
+				if p.ID != pointID(c.ID) || p.Payload.ChunkID != c.ID || p.Payload.IndexID != c.IndexID || p.Payload.WorkspaceID != testWorkspace || p.Payload.GenerationID != testGeneration ||
+					p.Payload.KnowledgeBaseID != testKnowledgeBase || p.Payload.DocumentID != testDocument || p.Payload.VersionID != testVersion {
 					t.Error("incorrect scope")
 				}
 				var bm map[string]any
@@ -73,6 +78,7 @@ func TestQdrantNativeRequests(t *testing.T) {
 			if string(body["with_payload"]) != "true" || string(body["with_vector"]) != "false" {
 				t.Error("payload/vector projection")
 			}
+			assertSameJSON(t, body["filter"], []byte(`{"must":[{"key":"workspace_id","match":{"value":"`+testWorkspace+`"}},{"key":"generation_id","match":{"any":["`+testGeneration+`"]}}]}`))
 			if len(body["prefetch"]) > 0 {
 				assertSameJSON(t, body["query"], []byte(`{"rrf":{"k":61}}`))
 				var prefetch []map[string]json.RawMessage
@@ -129,7 +135,8 @@ func mustJSON(value any) []byte { b, _ := json.Marshal(value); return b }
 func TestQdrantRejectsInvalidAndForeignResults(t *testing.T) {
 	for _, kind := range []string{"workspace", "generation", "chunk", "point", "score", "duplicate", "missing", "malformed", "error", "oversized"} {
 		t.Run(kind, func(t *testing.T) {
-			p := pointPayload{testChunk, testIndex, testWorkspace, testGeneration}
+			p := pointPayload{ChunkID: testChunk, IndexID: testIndex, WorkspaceID: testWorkspace, GenerationID: testGeneration,
+				KnowledgeBaseID: testKnowledgeBase, DocumentID: testDocument, VersionID: testVersion}
 			hit := map[string]any{"id": pointID(testChunk), "score": 0.2, "payload": p}
 			switch kind {
 			case "workspace":
@@ -230,6 +237,121 @@ func TestQdrantSchemaFailureAndRepair(t *testing.T) {
 		})
 	}
 }
+
+func TestQdrantOwnershipIndexesResumeWithoutRebuildingPoints(t *testing.T) {
+	schema := qdrantSchema()
+	fields := schema["result"].(map[string]any)["payload_schema"].(map[string]any)
+	for _, name := range []string{"knowledge_base_id", "document_id", "version_id"} {
+		delete(fields, name)
+	}
+	writes := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			json.NewEncoder(w).Encode(schema)
+			return
+		}
+		if r.Method != http.MethodPut || r.URL.Path != collectionPath(testProfile)+"/index" || r.URL.Query().Get("wait") != "true" {
+			t.Errorf("ownership repair must only create payload indexes: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Name string `json:"field_name"`
+			Type string `json:"field_schema"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Type != "keyword" {
+			t.Errorf("invalid payload index request: %v", err)
+		}
+		writes[body.Name]++
+		if body.Name == "document_id" && writes[body.Name] == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		fields[body.Name] = map[string]any{"data_type": "keyword"}
+		fmt.Fprint(w, `{"status":"ok","result":{"status":"completed"}}`)
+	}))
+	defer server.Close()
+	q, _ := NewQdrant(server.URL, "", 256)
+	requireClientError(t, q.Ensure(context.Background(), testProfile, 2), "qdrant_unavailable")
+	for i := 0; i < 2; i++ {
+		if err := q.Ensure(context.Background(), testProfile, 2); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if writes["knowledge_base_id"] != 1 || writes["document_id"] != 2 || writes["version_id"] != 1 || len(writes) != 3 {
+		t.Fatalf("repair did not resume idempotently: %v", writes)
+	}
+}
+
+func TestQdrantOwnershipMetadataIsNotAuthorization(t *testing.T) {
+	for _, kind := range []string{"legacy missing fields", "stale ownership", "invalid advisory IDs"} {
+		t.Run(kind, func(t *testing.T) {
+			payload := map[string]any{"chunk_id": testChunk, "index_id": testIndex, "workspace_id": testWorkspace, "generation_id": testGeneration}
+			if kind != "legacy missing fields" {
+				value := strings.Repeat("f", 32)
+				if kind == "invalid advisory IDs" {
+					value = "untrusted metadata"
+				}
+				for _, field := range []string{"knowledge_base_id", "document_id", "version_id"} {
+					payload[field] = value
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				assertSameJSON(t, body["filter"], []byte(`{"must":[{"key":"workspace_id","match":{"value":"`+testWorkspace+`"}},{"key":"generation_id","match":{"any":["`+testGeneration+`"]}}]}`))
+				json.NewEncoder(w).Encode(map[string]any{"status": "ok", "result": map[string]any{"points": []any{
+					map[string]any{"id": pointID(testChunk), "score": .2, "payload": payload},
+				}}})
+			}))
+			defer server.Close()
+			q, _ := NewQdrant(server.URL, "", 256)
+			for _, mode := range []string{"lexical", "vector", "hybrid"} {
+				hits, err := q.Search(context.Background(), testProfile, testWorkspace, []string{testGeneration}, "synthetic", []float32{1, 0}, mode, 5)
+				if err != nil || len(hits) != 1 || hits[0].ChunkID != testChunk || hits[0].IndexID != testIndex || hits[0].Generation != testGeneration {
+					t.Fatalf("%s: metadata replaced trusted candidate identities: %v %v", mode, hits, err)
+				}
+			}
+		})
+	}
+}
+
+func TestQdrantUpsertRejectsMissingOrMixedOwnershipBeforeWriting(t *testing.T) {
+	changes := map[string]func(*domain.IndexChunk){
+		"missing workspace":      func(c *domain.IndexChunk) { c.WorkspaceID = "" },
+		"wrong workspace":        func(c *domain.IndexChunk) { c.WorkspaceID = strings.Repeat("f", 32) },
+		"wrong generation":       func(c *domain.IndexChunk) { c.Generation = strings.Repeat("f", 32) },
+		"missing knowledge base": func(c *domain.IndexChunk) { c.KnowledgeBaseID = "" },
+		"invalid knowledge base": func(c *domain.IndexChunk) { c.KnowledgeBaseID = "invalid" },
+		"mixed knowledge bases":  func(c *domain.IndexChunk) { c.KnowledgeBaseID = strings.Repeat("f", 32) },
+		"missing document":       func(c *domain.IndexChunk) { c.DocumentID = "" },
+		"invalid document":       func(c *domain.IndexChunk) { c.DocumentID = "invalid" },
+		"mixed documents":        func(c *domain.IndexChunk) { c.DocumentID = strings.Repeat("f", 32) },
+		"missing version":        func(c *domain.IndexChunk) { c.VersionID = "" },
+		"invalid version":        func(c *domain.IndexChunk) { c.VersionID = "invalid" },
+		"mixed versions":         func(c *domain.IndexChunk) { c.VersionID = strings.Repeat("f", 32) },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				t.Error("invalid ownership reached Qdrant")
+			}))
+			defer server.Close()
+			q, _ := NewQdrant(server.URL, "", 256)
+			chunks, vectors := testChunks(2)
+			change(&chunks[1])
+			requireClientError(t, q.Upsert(context.Background(), testProfile, testGeneration, testWorkspace, chunks, vectors), "qdrant_invalid")
+			if calls != 0 {
+				t.Fatal("invalid batch was partially written")
+			}
+		})
+	}
+}
+
 func TestQdrantInputsAndProfile(t *testing.T) {
 	for _, avg := range []float64{0, -1, math.NaN(), math.Inf(1), 65537} {
 		if _, err := NewQdrant("http://localhost", "", avg); err == nil {
@@ -287,6 +409,35 @@ func TestQdrantLiveNativeChineseBM25RRFAndMutations(t *testing.T) {
 	if err = q.Upsert(ctx, profile, testGeneration, testWorkspace, chunks, vecs); err != nil {
 		t.Fatal(err)
 	}
+	// Read the actual stored payload, rather than relying only on the write
+	// acknowledgement. These fields locate data; SQL remains authoritative.
+	pointIDs := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		pointIDs[i] = pointID(chunk.ID)
+	}
+	status, body, err := q.http.call(ctx, http.MethodPost, collectionPath(profile)+"/points", map[string]any{"ids": pointIDs, "with_payload": true, "with_vector": false}, nil)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("read stored ownership payload: HTTP %d, %v", status, err)
+	}
+	var stored struct {
+		Status string `json:"status"`
+		Result []struct {
+			ID      string       `json:"id"`
+			Payload pointPayload `json:"payload"`
+		} `json:"result"`
+	}
+	if err = json.Unmarshal(body, &stored); err != nil || stored.Status != "ok" || len(stored.Result) != len(chunks) {
+		t.Fatalf("read stored ownership payload: invalid result, %v", err)
+	}
+	seen := map[string]bool{}
+	for _, point := range stored.Result {
+		p := point.Payload
+		if point.ID != pointID(p.ChunkID) || seen[p.ChunkID] || p.IndexID != testIndex || p.WorkspaceID != testWorkspace || p.GenerationID != testGeneration ||
+			p.KnowledgeBaseID != testKnowledgeBase || p.DocumentID != testDocument || p.VersionID != testVersion {
+			t.Fatal("stored ownership payload differs from published source")
+		}
+		seen[p.ChunkID] = true
+	}
 	search := func(mode, workspace, generation, query string) []domain.IndexCandidate {
 		t.Helper()
 		v, err := q.Search(ctx, profile, workspace, []string{generation}, query, []float32{1, 0}, mode, 10)
@@ -340,5 +491,5 @@ func TestQdrantLiveNativeChineseBM25RRFAndMutations(t *testing.T) {
 	if err = q.DeleteGeneration(ctx, profile, testGeneration); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("real Qdrant: multilingual BM25, native RRF, scopes, idempotent upsert, TF/IDF update and deletion passed")
+	t.Log("real Qdrant: ownership payload and indexes, multilingual BM25, native RRF, scopes, idempotent upsert, TF/IDF update and deletion passed")
 }

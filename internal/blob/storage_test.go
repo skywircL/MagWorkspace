@@ -22,6 +22,32 @@ func TestMinIOConfiguration(t *testing.T) {
 	}
 }
 
+func TestMinIOStorageBindingUsesDestinationNotCredentials(t *testing.T) {
+	first, err := NewMinIO("http://storage.example:9000", "documents", "one", "secret-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := NewMinIO("http://STORAGE.example:9000/", "documents", "two", "secret-two")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherBucket, err := NewMinIO("http://storage.example:9000", "other-documents", "one", "secret-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherEndpoint, err := NewMinIO("http://other.example:9000", "documents", "one", "secret-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.StorageID()) != 64 || first.StorageID() != rotated.StorageID() || first.StorageID() == otherBucket.StorageID() || first.StorageID() == otherEndpoint.StorageID() {
+		t.Fatal("storage binding did not isolate a destination across credential rotation")
+	}
+	emptyQuery, err := NewMinIO("http://storage.example:9000?", "documents", "one", "secret-one")
+	if err != nil || first.StorageID() != emptyQuery.StorageID() {
+		t.Fatal("endpoint spelling changed the same bucket's binding", err)
+	}
+}
+
 // This contract runs against the Docker MinIO service, never user documents.
 func TestMinIOLive(t *testing.T) {
 	endpoint := os.Getenv("MAGWORKSPACE_TEST_MINIO_URL")

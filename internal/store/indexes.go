@@ -11,7 +11,7 @@ import (
 	"magworkspace/internal/domain"
 )
 
-const indexColumns = `i.id,i.workspace_id,i.document_id,i.version_id,i.profile_id,i.source_sha256,i.status,i.error_code,i.attempts,i.generation,i.created_by,i.created_at,i.updated_at,i.finished_at,i.chunk_count,i.parent_count`
+const indexColumns = `i.id,i.workspace_id,i.knowledge_base_id,i.document_id,i.version_id,i.profile_id,i.storage_id,i.source_sha256,i.status,i.error_code,i.attempts,i.generation,i.created_by,i.created_at,i.updated_at,i.finished_at,i.chunk_count,i.parent_count`
 
 func validProfileID(id string) bool {
 	if len(id) != 32 && len(id) != 64 {
@@ -38,11 +38,11 @@ func validHexID(id string) bool {
 }
 
 func validIndexProfile(profile domain.IndexProfile) bool {
-	return validProfileID(profile.ID) && validDocumentText(profile.Model) && profile.Dimensions > 0 && profile.Dimensions <= 65536
+	return validProfileID(profile.ID) && validArtifactSHA(profile.StorageID) && validDocumentText(profile.Model) && profile.Dimensions > 0 && profile.Dimensions <= 65536
 }
 
 func indexDest(job *domain.IndexJob) []any {
-	return []any{&job.ID, &job.WorkspaceID, &job.DocumentID, &job.VersionID, &job.ProfileID, &job.SourceSHA256, &job.Status, &job.ErrorCode, &job.Attempts, &job.Generation, &job.CreatedBy, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.ChunkCount, &job.ParentCount}
+	return []any{&job.ID, &job.WorkspaceID, &job.KnowledgeBaseID, &job.DocumentID, &job.VersionID, &job.ProfileID, &job.StorageID, &job.SourceSHA256, &job.Status, &job.ErrorCode, &job.Attempts, &job.Generation, &job.CreatedBy, &job.CreatedAt, &job.UpdatedAt, &job.FinishedAt, &job.ChunkCount, &job.ParentCount}
 }
 
 func scanIndex(row rowScanner) (domain.IndexJob, error) {
@@ -54,8 +54,8 @@ func scanIndex(row rowScanner) (domain.IndexJob, error) {
 // enqueueIndexTx requires the workspace/document authorization locks. It is
 // also used by upload, making source-version creation and admission atomic.
 func enqueueIndexTx(ctx context.Context, tx *sql.Tx, userID, workspaceID, documentID, versionID string, profile domain.IndexProfile) (domain.IndexJob, bool, error) {
-	var source string
-	if err := tx.QueryRowContext(ctx, `SELECT sha256 FROM document_versions WHERE id=? AND document_id=?`, versionID, documentID).Scan(&source); err != nil {
+	var source, knowledgeBaseID string
+	if err := tx.QueryRowContext(ctx, `SELECT v.sha256,d.knowledge_base_id FROM document_versions v JOIN documents d ON d.id=v.document_id WHERE v.id=? AND v.document_id=? AND d.workspace_id=?`, versionID, documentID, workspaceID).Scan(&source, &knowledgeBaseID); err != nil {
 		return domain.IndexJob{}, false, err
 	}
 	job, err := scanIndex(tx.QueryRowContext(ctx, `SELECT `+indexColumns+` FROM document_indexes i WHERE i.version_id=? AND i.profile_id=? AND i.document_id=? AND i.workspace_id=? FOR UPDATE`, versionID, profile.ID, documentID, workspaceID))
@@ -65,20 +65,20 @@ func enqueueIndexTx(ctx context.Context, tx *sql.Tx, userID, workspaceID, docume
 		if err = tx.QueryRowContext(ctx, `SELECT embedding_model,dimensions FROM document_indexes WHERE id=?`, job.ID).Scan(&model, &dimensions); err != nil {
 			return job, false, err
 		}
-		if model != profile.Model || dimensions != profile.Dimensions || job.SourceSHA256 != source {
+		if model != profile.Model || dimensions != profile.Dimensions || job.SourceSHA256 != source || job.StorageID != profile.StorageID {
 			return job, false, domain.ErrConflict
 		}
 		if job.Status != "failed" {
 			return job, false, nil
 		}
-		if err = queueIndexCleanupTx(ctx, tx, job.ProfileID, job.Generation); err != nil {
+		if err = queueIndexCleanupTx(ctx, tx, job.StorageID, job.ProfileID, job.Generation); err != nil {
 			return job, false, err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE document_indexes SET status='queued',error_code='',generation='',lease_expires_at=NULL,chunk_count=0,parent_count=0,created_by=?,finished_at=NULL,updated_at=UTC_TIMESTAMP(6) WHERE id=?`, userID, job.ID)
 	} else if errors.Is(err, domain.ErrNotFound) {
 		job.ID, err = newID()
 		if err == nil {
-			_, err = tx.ExecContext(ctx, `INSERT INTO document_indexes(id,workspace_id,document_id,version_id,profile_id,embedding_model,dimensions,source_sha256,created_by) VALUES(?,?,?,?,?,?,?,?,?)`, job.ID, workspaceID, documentID, versionID, profile.ID, profile.Model, profile.Dimensions, source, userID)
+			_, err = tx.ExecContext(ctx, `INSERT INTO document_indexes(id,workspace_id,knowledge_base_id,document_id,version_id,profile_id,storage_id,embedding_model,dimensions,source_sha256,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, job.ID, workspaceID, knowledgeBaseID, documentID, versionID, profile.ID, profile.StorageID, profile.Model, profile.Dimensions, source, userID)
 		}
 	}
 	if err != nil {
@@ -161,7 +161,7 @@ func currentIndexWriter(ctx context.Context, tx *sql.Tx, job domain.IndexJob) (b
 }
 
 func failIndexTx(ctx context.Context, tx *sql.Tx, job domain.IndexJob, code string) error {
-	if err := queueIndexCleanupTx(ctx, tx, job.ProfileID, job.Generation); err != nil {
+	if err := queueIndexCleanupTx(ctx, tx, job.StorageID, job.ProfileID, job.Generation); err != nil {
 		return err
 	}
 	_, err := tx.ExecContext(ctx, `UPDATE document_indexes SET status='failed',error_code=?,lease_expires_at=NULL,finished_at=UTC_TIMESTAMP(6),updated_at=UTC_TIMESTAMP(6) WHERE id=?`, code, job.ID)
@@ -232,6 +232,9 @@ func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.In
 			if job.Status != "queued" && (job.Status != "running" || active) {
 				return nil
 			}
+			if job.StorageID == "" || (s.indexProfile != nil && (job.ProfileID != s.indexProfile.ID || job.StorageID != s.indexProfile.StorageID)) {
+				return nil
+			}
 			var currentDelivery string
 			var due bool
 			var recoveries int
@@ -264,7 +267,7 @@ func (s *Store) claimIndexCandidates(ctx context.Context, candidates []domain.In
 					return err
 				}
 			}
-			if err = queueIndexCleanupTx(ctx, tx, job.ProfileID, job.Generation); err != nil {
+			if err = queueIndexCleanupTx(ctx, tx, job.StorageID, job.ProfileID, job.Generation); err != nil {
 				return err
 			}
 			generation, err := newID()
@@ -314,6 +317,9 @@ func validArtifactSHA(value string) bool {
 // FinishDocumentIndex publishes trusted chunk bodies and the ready state in one
 // transaction, after the worker has persisted and verified the search engine.
 func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJob, chunks []domain.IndexChunk) error {
+	if !validArtifactSHA(expected.StorageID) {
+		return domain.ErrInvalid
+	}
 	parents, children, err := validateIndexChunks(expected, chunks)
 	if err != nil {
 		return err
@@ -326,7 +332,7 @@ func (s *Store) FinishDocumentIndex(ctx context.Context, expected domain.IndexJo
 		if deleted {
 			return domain.ErrNotFound
 		}
-		if job.Status != "running" || job.Generation != expected.Generation || !active || job.SourceSHA256 != expected.SourceSHA256 {
+		if job.Status != "running" || job.Generation != expected.Generation || !active || job.SourceSHA256 != expected.SourceSHA256 || job.KnowledgeBaseID != expected.KnowledgeBaseID || job.StorageID != expected.StorageID {
 			return domain.ErrConflict
 		}
 		allowed, err := currentIndexWriter(ctx, tx, job)
@@ -435,7 +441,7 @@ func (s *Store) searchIndexScopeScoped(ctx context.Context, userID, workspaceID,
 			return err
 		}
 		args := append([]any{workspaceID, profileID}, scopeArgs...)
-		rows, err := tx.QueryContext(ctx, `SELECT i.generation FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id AND d.current_version_id=i.version_id WHERE i.workspace_id=? AND i.profile_id=? AND i.status='ready' AND d.deleted_at IS NULL`+filter+` ORDER BY i.id LIMIT 10001`, args...)
+		rows, err := tx.QueryContext(ctx, `SELECT i.generation FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id AND d.current_version_id=i.version_id WHERE i.workspace_id=? AND i.profile_id=? AND i.storage_id<>'' AND i.status='ready' AND d.deleted_at IS NULL`+filter+` ORDER BY i.id LIMIT 10001`, args...)
 		if err != nil {
 			return err
 		}
@@ -516,7 +522,7 @@ func (s *Store) resolveIndexesScoped(ctx context.Context, userID, workspaceID, p
 		}
 		args = append(args, scopeArgs...)
 		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(valid)), ",")
-		rows, err := tx.QueryContext(ctx, `SELECT `+indexColumns+`,d.title FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id AND d.current_version_id=i.version_id WHERE i.workspace_id=? AND i.profile_id=? AND i.status='ready' AND d.deleted_at IS NULL AND i.id IN (`+placeholders+`)`+filter, args...)
+		rows, err := tx.QueryContext(ctx, `SELECT `+indexColumns+`,d.title FROM document_indexes i JOIN documents d ON d.id=i.document_id AND d.workspace_id=i.workspace_id AND d.current_version_id=i.version_id WHERE i.workspace_id=? AND i.profile_id=? AND i.storage_id<>'' AND i.status='ready' AND d.deleted_at IS NULL AND i.id IN (`+placeholders+`)`+filter, args...)
 		if err != nil {
 			return err
 		}

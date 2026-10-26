@@ -72,7 +72,7 @@ func ProfileWithChunking(model string, dimensions int, parserURL, embeddingURL, 
 	data, _ := json.Marshal([]any{pipeline, model, dimensions,
 		strings.TrimRight(parserURL, "/"), strings.TrimRight(embeddingURL, "/"), strings.TrimRight(vectorURL, "/"), bm25Options(avgLen)})
 	hash := sha256.Sum256(data)
-	return domain.IndexProfile{ID: hex.EncodeToString(hash[:]), Model: model, Dimensions: dimensions, ChunkingStrategy: strategy}, nil
+	return domain.IndexProfile{ID: hex.EncodeToString(hash[:]), StorageID: domain.StorageBindingID("qdrant", vectorURL, "mw_"), Model: model, Dimensions: dimensions, ChunkingStrategy: strategy}, nil
 }
 
 func NewService(db *store.Store, parser Parser, embedder Embedder, search SearchStore, objects blob.Storage, profile domain.IndexProfile, opts Options) *Service {
@@ -158,18 +158,6 @@ func (s *Service) Run(ctx context.Context) {
 			}
 		}()
 	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for ctx.Err() == nil {
-			if err := s.CleanupOnce(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("index cleanup pending", "code", ErrorCode(err))
-			}
-			if !pause(ctx, 2*s.opts.PollInterval) {
-				return
-			}
-		}
-	}()
 	wg.Wait()
 }
 
@@ -235,7 +223,7 @@ func (s *Service) executeClaimed(ctx context.Context, input *domain.IndexInput) 
 	cleanupCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	if ctx.Err() != nil {
-		_ = s.db.QueueIndexCleanup(cleanupCtx, input.Job.ProfileID, input.Job.Generation)
+		_ = s.db.QueueIndexCleanup(cleanupCtx, input.Job.StorageID, input.Job.ProfileID, input.Job.Generation)
 		return err, ctx.Err()
 	}
 	code := ErrorCode(err)
@@ -257,7 +245,7 @@ func (s *Service) executeClaimed(ctx context.Context, input *domain.IndexInput) 
 	}
 	// A changed generation, deleted workspace or committed ready state wins.
 	if errors.Is(persistErr, domain.ErrConflict) || errors.Is(persistErr, domain.ErrNotFound) {
-		persistErr = s.db.QueueIndexCleanup(cleanupCtx, input.Job.ProfileID, input.Job.Generation)
+		persistErr = s.db.QueueIndexCleanup(cleanupCtx, input.Job.StorageID, input.Job.ProfileID, input.Job.Generation)
 	}
 	return err, persistErr
 }
@@ -272,6 +260,9 @@ func retryableIndexError(err error) bool {
 }
 
 func (s *Service) process(ctx context.Context, input *domain.IndexInput) (resultErr error) {
+	if s.search == nil || input.Job.StorageID == "" || input.Job.StorageID != s.search.StorageID() || input.Job.StorageID != s.profile.StorageID || input.Job.ProfileID != s.profile.ID {
+		return &Failure{Code: "storage_binding_unavailable"}
+	}
 	ctx, finish := s.opts.Telemetry.Start(ctx, "index.process")
 	started := time.Now()
 	defer func() {
@@ -319,6 +310,8 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 		chunks[i].ID = hex.EncodeToString(id[:])
 		chunks[i].IndexID = input.Job.ID
 		chunks[i].Generation = input.Job.Generation
+		chunks[i].WorkspaceID = input.Job.WorkspaceID
+		chunks[i].KnowledgeBaseID = input.Job.KnowledgeBaseID
 		chunks[i].DocumentID = input.Job.DocumentID
 		chunks[i].VersionID = input.Job.VersionID
 		chunks[i].SourceSHA256 = input.Job.SourceSHA256
@@ -370,31 +363,7 @@ func (s *Service) process(ctx context.Context, input *domain.IndexInput) (result
 }
 
 func (s *Service) CleanupOnce(ctx context.Context) error {
-	items, err := s.db.PendingIndexCleanup(ctx, 16)
-	if err != nil {
-		return err
-	}
-	var firstErr error
-	for _, item := range items {
-		cleanCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		err = s.search.DeleteGeneration(cleanCtx, item.ProfileID, item.Generation)
-		if err == nil {
-			err = s.db.CompleteIndexCleanup(cleanCtx, item.ID)
-		}
-		cancel()
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if deferErr := s.db.DeferIndexCleanup(ctx, item.ID, 30*time.Second); deferErr != nil {
-				return deferErr
-			}
-		}
-	}
-	return firstErr
+	return NewCleaner(s.db, []SearchStore{s.search}).CleanupOnce(ctx)
 }
 
 func (s *Service) Search(ctx context.Context, userID, workspaceID, query, mode string, limit int) ([]domain.SearchHit, error) {
@@ -409,6 +378,9 @@ func (s *Service) SearchScoped(ctx context.Context, userID, workspaceID, query, 
 }
 
 func (s *Service) searchScoped(ctx context.Context, userID, workspaceID string, knowledgeBaseIDs []string, query, mode string, limit int, documentIDs []string, rerank bool, diagnostic *reranking.Diagnostics, resources *domain.ResourceScope) (results []domain.SearchHit, resultErr error) {
+	if s.search == nil || s.profile.StorageID == "" || s.profile.StorageID != s.search.StorageID() {
+		return nil, &Failure{Code: "storage_binding_unavailable"}
+	}
 	ctx, finish := s.opts.Telemetry.Start(ctx, "retrieval.search")
 	started := time.Now()
 	defer func() {
@@ -500,7 +472,9 @@ func (s *Service) searchScoped(ctx context.Context, userID, workspaceID string, 
 	}
 	published := make(map[string]domain.IndexJob)
 	for _, ref := range refs {
-		published[ref.Job.ID] = ref.Job
+		if ref.Job.StorageID == s.profile.StorageID {
+			published[ref.Job.ID] = ref.Job
+		}
 	}
 	hints := make([]domain.IndexCandidate, 0, len(candidatesByID))
 	for _, c := range candidatesByID {

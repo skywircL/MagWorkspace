@@ -78,6 +78,7 @@ func newSSEIntegrationFixture(t *testing.T, config httpapi.Config, client *sseIn
 }
 
 type sseTestPayload struct {
+	Code      string     `json:"code"`
 	RunID     string     `json:"run_id"`
 	SessionID string     `json:"session_id"`
 	Run       domain.Run `json:"run"`
@@ -576,55 +577,62 @@ func TestHTTPSSETimeoutSendsTerminalFailure(t *testing.T) {
 	}
 }
 
-func TestHTTPSSEDisconnectCancelsAgentAndReleasesSession(t *testing.T) {
+func TestHTTPSSEDisconnectKeepsAgentAndReplaysCompletion(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	finish := func() { once.Do(func() { close(release) }) }
+	defer finish()
 	canceled := make(chan struct{})
 	client := &sseIntegrationAgent{stream: func(ctx context.Context, req agent.Request, emit func(agent.Event) error) (agent.Result, error) {
 		if err := emitSSETestMessage(req, emit, 1, "partial answer"); err != nil {
 			return agent.Result{}, err
 		}
-		<-ctx.Done()
-		close(canceled)
-		return agent.Result{}, ctx.Err()
+		select {
+		case <-ctx.Done():
+			close(canceled)
+			return agent.Result{}, ctx.Err()
+		case <-release:
+		}
+		if err := emit(agent.Event{Type: "message.delta", RunID: req.RunID, SessionID: req.SessionID, Round: 1, Delta: " continued"}); err != nil {
+			return agent.Result{}, err
+		}
+		return agent.Result{RunID: req.RunID, Answer: "final answer after disconnect", Mode: "demo"}, nil
 	}}
 	f := newSSEIntegrationFixture(t, httpapi.Config{AllowRegistration: true}, client)
-	auth := f.register(t, "disconnect")
-	session := f.session(t, auth, auth.Workspaces[0].ID, "Disconnect")
+	owner := f.register(t, "disconnect")
+	session := f.session(t, owner, owner.Workspaces[0].ID, "Disconnect")
 	path := sessionPath(session)
-	connection := openSSETestConnection(t, f, path+"/messages", auth.Token, "disconnect")
+	connection := openSSETestConnection(t, f, path+"/messages", owner.Token, "question")
 	started := connection.next(t, "run.started")
 	connection.next(t, "message.start")
 	connection.next(t, "message.delta")
 	connection.close()
 	select {
 	case <-canceled:
-	case <-time.After(5 * time.Second):
-		t.Fatal("client disconnect did not cancel agent context")
+		t.Fatal("browser disconnect canceled execution")
+	case <-time.After(150 * time.Millisecond):
 	}
-	deadline := time.NewTimer(5 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		run := integrationData[domain.Run](t, f.request(t, http.MethodGet, path+"/runs/"+started.RunID, auth.Token, nil, http.StatusOK))
-		if run.Status == "failed" {
-			if run.ErrorCode != "agent_canceled" || run.FinishedAt == nil {
-				t.Fatalf("disconnect failed with wrong terminal state: %+v", run)
-			}
-			break
-		}
-		if run.Status != "running" {
-			t.Fatalf("unexpected state after disconnect: %+v", run)
-		}
-		select {
-		case <-ticker.C:
-		case <-deadline.C:
-			t.Fatal("disconnected run stayed active")
-		}
+	f.request(t, "POST", path+"/messages", owner.Token, map[string]string{"content": "overlap"}, 409)
+	// A new HTTP connection replays while the existing producer is still running.
+	req, _ := http.NewRequest("GET", f.server.URL+path+"/runs/"+started.RunID+"/events", nil)
+	req.Header.Set("Authorization", "Bearer "+owner.Token)
+	response, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	f.request(t, http.MethodPost, path+"/messages", auth.Token, map[string]string{"content": "after disconnect"}, http.StatusCreated)
-	requests, _, _ := client.calls()
-	if len(requests) != 2 || len(requests[1].History) != 0 {
-		t.Fatalf("disconnected turn entered history: %+v", requests)
+	defer response.Body.Close()
+	finish()
+	raw, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode != 200 || !strings.Contains(string(raw), "run.started") || !strings.Contains(string(raw), " continued") || !strings.Contains(string(raw), "run.completed") {
+		t.Fatalf("replay=%s err=%v", raw, err)
+	}
+	messages := integrationData[[]domain.Message](t, f.request(t, "GET", path+"/messages", owner.Token, nil, 200))
+	if len(messages) != 2 || messages[1].Content != "final answer after disconnect" {
+		t.Fatal(messages)
+	}
+	_, streams, runs := client.calls()
+	if streams != 1 || runs != 0 {
+		t.Fatal("replay executed Agent", streams, runs)
 	}
 }
 
@@ -756,7 +764,7 @@ func (w *failingSSETestWriter) Header() http.Header         { return w.recorder.
 func (w *failingSSETestWriter) WriteHeader(status int)      { w.recorder.WriteHeader(status) }
 func (w *failingSSETestWriter) Unwrap() http.ResponseWriter { return w.recorder }
 func (w *failingSSETestWriter) Write(data []byte) (int, error) {
-	w.targetPending = bytes.HasPrefix(data, []byte("event: "+w.target+"\n"))
+	w.targetPending = bytes.Contains(data, []byte("event: "+w.target+"\n"))
 	if w.targetPending && !w.failOnFlush {
 		w.fired = true
 		return 0, errors.New("injected SSE transport write failure")
@@ -776,69 +784,68 @@ func TestHTTPSSEWriterFailuresRespectCommitBoundary(t *testing.T) {
 	for _, test := range []struct {
 		name, event string
 		flush       bool
-	}{
-		{"delta write", "message.delta", false},
-		{"delta flush", "message.delta", true},
-		{"completed write", "run.completed", false},
-		{"completed flush", "run.completed", true},
-	} {
+	}{{"delta write", "message.delta", false}, {"delta flush", "message.delta", true}, {"completed write", "run.completed", false}, {"completed flush", "run.completed", true}} {
 		t.Run(test.name, func(t *testing.T) {
-			beforeCommit := test.event == "message.delta"
-			canceled := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			finish := func() { once.Do(func() { close(release) }) }
+			defer finish()
+			before := test.event == "message.delta"
 			client := &sseIntegrationAgent{stream: func(ctx context.Context, req agent.Request, emit func(agent.Event) error) (agent.Result, error) {
 				if err := emitSSETestMessage(req, emit, 1, "partial answer"); err != nil {
 					return agent.Result{}, err
 				}
-				if beforeCommit {
-					<-ctx.Done()
-					close(canceled)
-					return agent.Result{}, ctx.Err()
+				if before {
+					select {
+					case <-ctx.Done():
+						return agent.Result{}, ctx.Err()
+					case <-release:
+					}
 				}
 				return agent.Result{RunID: req.RunID, Answer: "final answer", Mode: "demo"}, nil
 			}}
 			f := newSSEIntegrationFixture(t, httpapi.Config{AllowRegistration: true}, client)
-			auth := f.register(t, "transport")
-			session := f.session(t, auth, auth.Workspaces[0].ID, "Transport boundary")
-			path := sessionPath(session)
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			request := httptest.NewRequest(http.MethodPost, path+"/messages", strings.NewReader(`{"content":"transport test"}`)).WithContext(ctx)
-			request.Header.Set("Authorization", "Bearer "+auth.Token)
+			owner := f.register(t, "transport")
+			session := f.session(t, owner, owner.Workspaces[0].ID, "Transport boundary")
+			request := httptest.NewRequest("POST", sessionPath(session)+"/messages", strings.NewReader(`{"content":"transport test"}`))
+			request.Header.Set("Authorization", "Bearer "+owner.Token)
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Accept", "text/event-stream")
 			writer := &failingSSETestWriter{recorder: httptest.NewRecorder(), target: test.event, failOnFlush: test.flush}
-			finished := make(chan struct{})
-			go func() {
-				defer close(finished)
-				httpapi.New(f.store, client, f.config).ServeHTTP(writer, request)
-			}()
-			select {
-			case <-finished:
-			case <-time.After(5 * time.Second):
-				t.Fatal("handler did not stop after injected transport failure")
-			}
+			handler := httpapi.New(f.store, client, f.config)
+			defer handler.Shutdown(context.Background())
+			handler.ServeHTTP(writer, request)
 			if !writer.fired {
-				t.Fatalf("did not reach transport failure on %s: %s", test.event, writer.recorder.Body.String())
+				t.Fatalf("failure not reached: %s", writer.recorder.Body.String())
 			}
-			requests, streams, _ := client.calls()
-			if streams != 1 || len(requests) != 1 {
-				t.Fatalf("expected one streaming worker, got %d", streams)
+			rid := writer.Header().Get("X-Run-ID")
+			if before {
+				run := integrationData[domain.Run](t, f.request(t, "GET", sessionPath(session)+"/runs/"+rid, owner.Token, nil, 200))
+				if run.Status != "running" {
+					t.Fatal("writer failure canceled worker", run)
+				}
 			}
-			run := integrationData[domain.Run](t, f.request(t, http.MethodGet, path+"/runs/"+requests[0].RunID, auth.Token, nil, http.StatusOK))
-			messages := integrationData[[]domain.Message](t, f.request(t, http.MethodGet, path+"/messages", auth.Token, nil, http.StatusOK))
-			if beforeCommit {
-				select {
-				case <-canceled:
-				default:
-					t.Fatal("failed text delta write did not cancel and join the worker")
-				}
-				if run.Status != "failed" || run.ErrorCode != "agent_canceled" || run.FinishedAt == nil || len(messages) != 1 || messages[0].Role != "user" || messages[0].Status != "failed" {
-					t.Fatalf("pre-commit write failure persisted an answer or left run active: run=%+v messages=%+v", run, messages)
-				}
-				f.request(t, http.MethodPost, path+"/messages", auth.Token, map[string]string{"content": "retry after writer failure"}, http.StatusCreated)
-			} else if run.Status != "completed" || run.FinishedAt == nil || len(messages) != 2 || messages[1].Role != "assistant" || messages[1].Content != "final answer" || messages[1].Status != "completed" {
-				t.Fatalf("terminal transport failure reverted durable completion: run=%+v messages=%+v", run, messages)
+			finish()
+			waitStreamRun(t, f, owner.Token, sessionPath(session)+"/runs/"+rid, "completed")
+			messages := integrationData[[]domain.Message](t, f.request(t, "GET", sessionPath(session)+"/messages", owner.Token, nil, 200))
+			if len(messages) != 2 || messages[1].Content != "final answer" {
+				t.Fatal(messages)
 			}
 		})
+	}
+}
+
+func waitStreamRun(t *testing.T, f *integrationFixture, token, path, status string) domain.Run {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		run := integrationData[domain.Run](t, f.request(t, "GET", path, token, nil, 200))
+		if run.Status == status {
+			return run
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waiting for %s: %+v", status, run)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

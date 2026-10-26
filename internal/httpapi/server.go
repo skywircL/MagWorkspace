@@ -25,11 +25,14 @@ import (
 	"magworkspace/internal/observability"
 	"magworkspace/internal/redisstate"
 	"magworkspace/internal/store"
+	"magworkspace/internal/stream"
 	"magworkspace/internal/webui"
 )
 
 type Config struct {
 	Redis             *redisstate.Client
+	Streams           stream.Manager
+	BackgroundContext context.Context
 	AllowRegistration bool
 	AccessTTL         time.Duration
 	RefreshTTL        time.Duration
@@ -41,6 +44,7 @@ type Config struct {
 }
 
 type server struct {
+	runtime   *Handler
 	db        *store.Store
 	agent     agent.Client
 	cfg       Config
@@ -54,7 +58,7 @@ type attempt struct {
 }
 type identityKey struct{}
 
-func New(db *store.Store, client agent.Client, cfg Config) http.Handler {
+func New(db *store.Store, client agent.Client, cfg Config) *Handler {
 	if cfg.AccessTTL <= 0 {
 		cfg.AccessTTL = time.Hour
 	}
@@ -70,7 +74,15 @@ func New(db *store.Store, client agent.Client, cfg Config) http.Handler {
 	if cfg.SSEWriteTimeout <= 0 {
 		cfg.SSEWriteTimeout = 5 * time.Second
 	}
-	s := &server{db: db, agent: observeAgent(client, cfg.Telemetry), cfg: cfg, attempts: make(map[string]attempt), authSlots: make(chan struct{}, 8)}
+	if cfg.Streams == nil {
+		cfg.Streams = stream.NewMemory(stream.DefaultTTL)
+	}
+	if cfg.BackgroundContext == nil {
+		cfg.BackgroundContext = context.Background()
+	}
+	background, stop := context.WithCancel(cfg.BackgroundContext)
+	runtime := &Handler{ctx: background, cancel: stop}
+	s := &server{runtime: runtime, db: db, agent: observeAgent(client, cfg.Telemetry), cfg: cfg, attempts: make(map[string]attempt), authSlots: make(chan struct{}, 8)}
 	router := newRouter()
 	route := func(method, path string, handler http.HandlerFunc) { registerHTTP(router, method, path, handler) }
 	ui := webui.Handler()
@@ -158,6 +170,7 @@ func New(db *store.Store, client agent.Client, cfg Config) http.Handler {
 	route("POST", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/messages", s.protected(s.chat))
 	route("GET", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID", s.protected(s.run))
 	route("GET", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID/events", s.protected(s.runEvents))
+	route("POST", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID/stop", s.protected(s.stopRun))
 	route("POST", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID/recover", s.protected(s.recoverRun))
 	route("GET", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID/prompt", s.protected(s.runPrompt))
 	route("GET", "/api/v1/workspaces/:workspaceID/sessions/:sessionID/runs/:runID/prompts/:promptID", s.protected(s.runPrompt))
@@ -181,7 +194,8 @@ func New(db *store.Store, client agent.Client, cfg Config) http.Handler {
 		}()
 		router.ServeHTTP(w, r)
 	})
-	return cfg.Telemetry.Handler(handler)
+	runtime.Handler = cfg.Telemetry.Handler(handler)
+	return runtime
 }
 
 func (s *server) protected(next http.HandlerFunc) http.HandlerFunc {
