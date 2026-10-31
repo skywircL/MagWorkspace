@@ -1,0 +1,16 @@
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='runs' AND index_name='runs_id_session')=0, 'ALTER TABLE runs ADD UNIQUE KEY runs_id_session(id,session_id)', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='messages' AND constraint_name='messages_run_session_fk')=0, 'ALTER TABLE messages ADD CONSTRAINT messages_run_session_fk FOREIGN KEY(run_id,session_id) REFERENCES runs(id,session_id) ON DELETE CASCADE', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema=DATABASE() AND table_name='run_prompts' AND index_name='run_prompts_id_run')=0, 'ALTER TABLE run_prompts ADD UNIQUE KEY run_prompts_id_run(id,run_id)', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='run_document_approvals' AND constraint_name='document_approval_prompt_run_fk')=0, 'ALTER TABLE run_document_approvals ADD CONSTRAINT document_approval_prompt_run_fk FOREIGN KEY(prompt_id,run_id) REFERENCES run_prompts(id,run_id) ON DELETE CASCADE', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;

@@ -1,0 +1,12 @@
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='run_document_sources' AND constraint_name='run_document_sources_index_shape')=0, 'ALTER TABLE run_document_sources ADD CONSTRAINT run_document_sources_index_shape CHECK((OCTET_LENGTH(index_id)=0 AND OCTET_LENGTH(generation)=0) OR (OCTET_LENGTH(index_id)=32 AND REGEXP_LIKE(index_id,''^[0-9a-f]{32}$'',''c'') AND OCTET_LENGTH(generation)=32 AND REGEXP_LIKE(generation,''^[0-9a-f]{32}$'',''c'')))', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='run_document_sources' AND constraint_name='run_document_sources_hash_shape')=0, 'ALTER TABLE run_document_sources ADD CONSTRAINT run_document_sources_hash_shape CHECK(OCTET_LENGTH(source_sha256)=64 AND REGEXP_LIKE(source_sha256,''^[0-9a-f]{64}$'',''c''))', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;
+SET @mw_ddl = IF((SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema=DATABASE() AND table_name='run_knowledge_base_sources' AND constraint_name='run_knowledge_base_sources_hash_shape')=0, 'ALTER TABLE run_knowledge_base_sources ADD CONSTRAINT run_knowledge_base_sources_hash_shape CHECK(OCTET_LENGTH(metadata_sha256)=64 AND REGEXP_LIKE(metadata_sha256,''^[0-9a-f]{64}$'',''c''))', 'DO 0');
+PREPARE mw_statement FROM @mw_ddl;
+EXECUTE mw_statement;
+DEALLOCATE PREPARE mw_statement;

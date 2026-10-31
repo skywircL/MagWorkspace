@@ -21,7 +21,7 @@ docker compose --profile app up -d --build
 
 `init-env.py` 为 MySQL / MinIO / Qdrant / Redis、内部 Harness API 和本地重排服务生成随机凭据，遇到已有 `.env` 会停止。升级已有环境时须补齐 `.env.example` 的 `MAGENT_SERVICE_API_KEY` 和 `RERANK_API_KEY`（各至少32字符随机值）；不能用聊天模型 API Key 代替。聊天模型凭据只注入 Harness 容器，Go 持内部服务通信凭据。配置说明见[Harness HTTP 服务](docs/harness-http.md)。
 
-首次启动会下载本地 bge-m3 向量模型及独立的多语言 mMARCO MiniLM 重排模型；后续复用各自模型卷。默认重排模型下载约493 MB（470 MiB），慢速网络需要等待。macOS Docker 两类模型均使用 CPU，索引和搜索速度受资源影响。`GET /healthz` 检查 Go 进程，`GET /readyz` 检查数据库并报告 Redis 状态；Harness 的健康端点默认在 `http://127.0.0.1:18090/healthz`，重排模型的加载健康端点为 `http://127.0.0.1:18091/health`。Go 就绪不代表重排模型已经加载；下载和验证方式见[重排运行时](docker/reranker/README.md)。
+首次启动会下载本地 bge-m3 向量模型及独立的中英文 BAAI/bge-reranker-base 重排模型；后续复用各自模型卷。默认重排模型权重约1.11 GB，慢速网络需要等待。macOS Docker 两类模型均使用 CPU，索引和搜索速度受资源影响。`GET /healthz` 检查 Go 进程，`GET /readyz` 检查数据库并报告 Redis 状态；Harness 的健康端点默认在 `http://127.0.0.1:18090/healthz`，重排模型的加载健康端点为 `http://127.0.0.1:18091/health`。Go 就绪不代表重排模型已经加载；下载和验证方式见[重排运行时](docker/reranker/README.md)。
 
 启动后打开 `http://127.0.0.1:8080/`（自定义 HTTP_PORT 时使用对应端口）。前端采用知识库列表与私有会话双入口，包含空间切换、索引状态、上传弹窗、全文检索和会话管理。前端无需 Node 或独立构建服务；支持注册/登录、空间、文档上传/版本/编辑/索引重试/检索、私有 SSE 会话、引用、提问答复及文档写审批。审批并排展示固定基线和完整拟写正文，批准后以写入回执确认结果。访问令牌仅在页面内存，刷新凭据使用 HttpOnly Cookie；刷新页面和新标签页可恢复登录，同一标签页会恢复所选空间/会话与待审批任务。退出会撤销服务器会话；断线不会自动重发写请求。
 
@@ -54,7 +54,7 @@ Workspace 内可建立多个知识库，owner/admin 管理库，owner/admin/cont
 | Redis | Asynq 索引与记忆采集执行、投递去重、短期处理进度和 SSE 补发；可靠投递与重试预算由 MySQL outbox 持有 |
 | Qdrant | 子块的内置多语言 BM25、向量索引与 RRF，可由原文重建 |
 | Ollama + bge-m3 | 为子块和查询本地生成 1024 维向量 |
-| TEI + mMARCO MiniLM | 对已召回且重新鉴权的子块进行相关性评分；不扫描全库，不写索引 |
+| PyTorch + BGE reranker | 对已召回且重新鉴权的子块进行相关性评分；不扫描全库，不写索引 |
 | Tika | 在受限容器中解析 PDF / DOCX；TXT / Markdown 在 Go 内处理 |
 
 Run journal 中的工具事实和 `context_committed` 上下文摘要保存在 MySQL，暂停快照与提问状态同事务提交；这些能力不因未配置 MinIO 而关闭。文件上传、下载及批准后创建原文件仍需要 MinIO。这里保留 Harness 的有界 JSONL 日志与摘要链契约，不将其等同于 WeKnora 清洗后的展示步骤，也不承诺无损重放外部副作用。当前职责及旧测试执行数据退役方式见[Agent状态存储决策](docs/decisions/027-agent-state-relational-storage.md)。
@@ -69,21 +69,24 @@ MySQL `chunks.content` 保存父子正文，全部分块与索引 ready 状态�
 
 Compose 默认启用本地重排：关键词与向量子候选经 RRF 融合后，先可信回读，再构造“当前文档标题＋章节路径＋清洗后的子块正文”，调用重排模型，完成阈值筛选、综合评分和 MMR 去冗余。同父保留最强子块，再选择不同父块 Top K；检索 API 与 Agent 工具共用实现。章节路径独立保存，评分输入不改写正文；返回的父引用使用真实父块 ID、字节与摘要。
 
-默认最多给模型20个候选，可配置到200；混合RRF先除以两路第一的理论得分 `2/61`，重排不再按候选最大分缩放；模型相关性分数、该检索分数与来源权重按0.6/0.3/0.1合成，MMR使用正文的中文词项Jaccard相似度。模型失败或超时退回已验证的召回结果；模型成功但相关性过低可以返回空结果，两者在API诊断中明确区分。接口字段、阈值与分数含义见[检索API](docs/api.md#文档处理与检索)。
+默认最多给模型10个候选，可配置到200；混合RRF先除以两路第一的理论得分 `2/61`，重排不再按候选最大分缩放；模型相关性分数、该检索分数与来源权重按0.6/0.3/0.1合成，MMR使用正文的中文词项Jaccard相似度。模型失败或超时退回已验证的召回结果；模型成功但相关性过低可以返回空结果，两者在API诊断中明确区分。接口字段、阈值与分数含义见[检索API](docs/api.md#文档处理与检索)。
 
 | 配置 | 默认值及用途 |
 |---|---|
 | `RERANK_ENABLED` | Compose/新 `.env` 为 `true`；直接运行未配置环境的 Go 程序为 `false` |
 | `RERANK_URL` | Go 本地开发默认 `http://127.0.0.1:18091/rerank`；Compose 使用内部 `reranker:8091/rerank` |
 | `RERANK_API_KEY` | 至少32字符；与独立容器共享的内部认证凭据 |
-| `RERANK_MODEL` / `RERANK_MODEL_REVISION` | `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` / `1427fd652930e4ba29e8149678df786c240d8825` |
-| `RERANK_MAX_CANDIDATES` | `20`，允许 `1..200`；增加前须按运行硬件测量延迟 |
+| `RERANK_MODEL` / `RERANK_MODEL_REVISION` | `BAAI/bge-reranker-base` / `2cfc18c9415c912f9d8155881c133215df768a70` |
+| `CROSS_ENCODER_DEVICE` | 空值依次选择 CUDA、Apple MPS、CPU；显式 `cuda` / `mps` / `cpu` 不可用时启动失败 |
+| `RERANK_MAX_CANDIDATES` | `10`，允许 `1..200`；增加前须按运行硬件测量延迟 |
 | `RERANK_THRESHOLD` | `0.2`，允许 `0..1`；不是答案正确概率 |
 | `RERANK_MAX_PASSAGE_RUNES` | `2048`，模型输入文本字符预算，允许 `128..8192` |
-| `RERANK_MAX_INPUT_TOKENS` | `1024`，TEI批次token预算；单对query/passage还受模型窗口限制，默认模型实际最多512 tokens |
+| `RERANK_MAX_INPUT_TOKENS` | `1024`，padding后的批次token预算；单对query/passage还受模型窗口限制，默认模型实际最多512 tokens |
 | `RERANK_REQUEST_TIMEOUT` | `30s`，允许 `1s..1m`；还受当前请求剩余时间限制 |
 
 更换重排模型或这些参数只改变请求时的 `retrieval_policy_id`，不改变持久索引 profile，无需重新生成 embedding。分块策略切换仍遵守上文重新索引规则。API可传 `"rerank": false` 作同索引基线比较，前端与Agent默认使用服务配置。新评测按policy冻结并追踪模型降级，不能续写旧无policy的成绩；本轮进度与实际验收状态见[迭代032](docs/iterations/032-retrieval-reranking.md)。
+
+NVIDIA Docker 使用 `docker compose -f compose.yaml -f compose.cuda.yaml --profile app up -d --build`，需要 NVIDIA Container Toolkit；`RERANK_CUDA_DEVICE_ID` 选择宿主 GPU（默认0）。Docker Desktop 不提供 Apple MPS，Mac GPU 请按[原生运行说明](docker/reranker/README.md)启动。设备选择与模型相关性是独立问题；[开发集→冻结决策→留出集评测](scripts/retrieval_eval/examples/reranking-holdout/README.md)同时报告相关性、无答案误召回和 p95，旧 MiniLM 成绩不能作为 BGE 成绩。
 
 ## Agent 模式
 

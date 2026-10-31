@@ -74,8 +74,8 @@ services:
       RERANK_ENABLED: ${RERANK_ENABLED:-true}
       RERANK_URL: http://reranker:8091/rerank
       RERANK_API_KEY: ${RERANK_API_KEY:-}
-      RERANK_MODEL: ${RERANK_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      RERANK_MODEL_REVISION: ${RERANK_MODEL_REVISION:-1427fd652930e4ba29e8149678df786c240d8825}
+      RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-base}
+      RERANK_MODEL_REVISION: ${RERANK_MODEL_REVISION:-2cfc18c9415c912f9d8155881c133215df768a70}
       RERANK_MAX_CANDIDATES: ${RERANK_MAX_CANDIDATES:-10}
       RERANK_THRESHOLD: ${RERANK_THRESHOLD:-0.2}
       RERANK_MAX_PASSAGE_RUNES: ${RERANK_MAX_PASSAGE_RUNES:-2048}
@@ -150,13 +150,15 @@ services:
     build:
       context: .
       dockerfile: docker/reranker/Dockerfile
+      args:
+        TORCH_INDEX_URL: ${RERANK_TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     image: magworkspace-reranker:local
     environment:
       API_KEY: ${RERANK_API_KEY:-}
-      MODEL_ID: ${RERANK_MODEL:-cross-encoder/mmarco-mMiniLMv2-L12-H384-v1}
-      REVISION: ${RERANK_MODEL_REVISION:-1427fd652930e4ba29e8149678df786c240d8825}
+      MODEL_ID: ${RERANK_MODEL:-BAAI/bge-reranker-base}
+      REVISION: ${RERANK_MODEL_REVISION:-2cfc18c9415c912f9d8155881c133215df768a70}
+      CROSS_ENCODER_DEVICE: ${CROSS_ENCODER_DEVICE:-}
       MAX_BATCH_TOKENS: ${RERANK_MAX_INPUT_TOKENS:-1024}
-      RAYON_NUM_THREADS: "4"
       OMP_NUM_THREADS: "4"
     ports:
       - "127.0.0.1:${RERANK_PORT:-18091}:8091"
@@ -166,7 +168,7 @@ services:
     cpus: 4
     init: true
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=2).close()"]
       interval: 10s
       timeout: 3s
       retries: 6
