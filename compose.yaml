@@ -71,7 +71,7 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-http://jaeger:4318/v1/traces}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       APP_ENV: ${APP_ENV:-development}
-      RERANK_ENABLED: ${RERANK_ENABLED:-true}
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
       RERANK_URL: http://reranker:8091/rerank
       RERANK_API_KEY: ${RERANK_API_KEY:-}
       RERANK_MODEL: ${RERANK_MODEL:-BAAI/bge-reranker-base}

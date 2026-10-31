@@ -67,13 +67,13 @@ MySQL `chunks.content` 保存父子正文，全部分块与索引 ready 状态�
 
 ## 召回与重排
 
-Compose 默认启用本地重排：关键词与向量子候选经 RRF 融合后，先可信回读，再构造“当前文档标题＋章节路径＋清洗后的子块正文”，调用重排模型，完成阈值筛选、综合评分和 MMR 去冗余。同父保留最强子块，再选择不同父块 Top K；检索 API 与 Agent 工具共用实现。章节路径独立保存，评分输入不改写正文；返回的父引用使用真实父块 ID、字节与摘要。
+默认保留基础检索，重排需显式设置 `RERANK_ENABLED=true`。本轮 BGE 配置未通过合成留出集的相关性门槛，因此没有升级为默认策略，详见[实验决策](scripts/retrieval_eval/examples/reranking-holdout/RESULTS-055.md)。启用后，关键词与向量子候选经 RRF 融合、可信回读，再构造“当前文档标题＋章节路径＋清洗后的子块正文”，调用重排模型，完成阈值筛选、综合评分和 MMR 去冗余。同父保留最强子块，再选择不同父块 Top K；检索 API 与 Agent 工具共用实现。章节路径独立保存，评分输入不改写正文；返回的父引用使用真实父块 ID、字节与摘要。
 
 默认最多给模型10个候选，可配置到200；混合RRF先除以两路第一的理论得分 `2/61`，重排不再按候选最大分缩放；模型相关性分数、该检索分数与来源权重按0.6/0.3/0.1合成，MMR使用正文的中文词项Jaccard相似度。模型失败或超时退回已验证的召回结果；模型成功但相关性过低可以返回空结果，两者在API诊断中明确区分。接口字段、阈值与分数含义见[检索API](docs/api.md#文档处理与检索)。
 
 | 配置 | 默认值及用途 |
 |---|---|
-| `RERANK_ENABLED` | Compose/新 `.env` 为 `true`；直接运行未配置环境的 Go 程序为 `false` |
+| `RERANK_ENABLED` | `false`；设置 `true` 显式启用，已有 `.env` 的显式值仍优先生效 |
 | `RERANK_URL` | Go 本地开发默认 `http://127.0.0.1:18091/rerank`；Compose 使用内部 `reranker:8091/rerank` |
 | `RERANK_API_KEY` | 至少32字符；与独立容器共享的内部认证凭据 |
 | `RERANK_MODEL` / `RERANK_MODEL_REVISION` | `BAAI/bge-reranker-base` / `2cfc18c9415c912f9d8155881c133215df768a70` |
