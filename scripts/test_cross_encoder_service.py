@@ -126,6 +126,26 @@ class DeviceTests(unittest.TestCase):
         self.assertEqual(settings.model_id, "BAAI/bge-reranker-base")
         self.assertEqual(len(settings.revision), 40)
 
+    def test_host_defaults_to_loopback_and_rejects_unsupported_addresses(self):
+        self.assertEqual(SERVICE.Settings.from_env({"API_KEY": KEY}).host, "127.0.0.1")
+        for host in ("127.0.0.1", "0.0.0.0"):
+            self.assertEqual(SERVICE.Settings.from_env({"API_KEY": KEY, "HOST": host}).host, host)
+        for host in ("", "localhost", "::1", "192.168.1.10"):
+            with self.subTest(host=host), self.assertRaises(SERVICE.ConfigurationError):
+                SERVICE.Settings.from_env({"API_KEY": KEY, "HOST": host})
+
+    def test_main_binds_the_configured_host(self):
+        for host in ("127.0.0.1", "0.0.0.0"):
+            with self.subTest(host=host), \
+                    mock.patch.dict(SERVICE.os.environ, {"API_KEY": KEY, "HOST": host, "PORT": "19091"}, clear=True), \
+                    mock.patch.object(SERVICE.CrossEncoder, "load", return_value=types.SimpleNamespace(device="cpu")), \
+                    mock.patch.object(SERVICE, "Server") as server, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(SERVICE.main(), 0)
+                self.assertEqual(server.call_args.args[0], (host, 19091))
+                server.return_value.serve_forever.assert_called_once_with()
+                server.return_value.server_close.assert_called_once_with()
+
     def test_startup_error_does_not_expose_model_error_or_key(self):
         stderr = io.StringIO()
         with mock.patch.dict(SERVICE.os.environ, {"API_KEY": KEY}, clear=True), \

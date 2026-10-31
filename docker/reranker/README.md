@@ -32,7 +32,7 @@ waiting for that lock is limited to 30 seconds (503 on timeout).
 `MAX_HTTP_REQUESTS` defaults to 16; surplus connections receive 503 instead of
 creating unbounded threads. HTTP reads have a 30-second timeout. Client cancellation
 bounds the caller's wait; already admitted inference can finish in the service.
-The application uses a smaller 20-candidate cap.
+The application uses a smaller 10-candidate cap.
 
 The backend must enforce its own timeout and fail back to the verified retrieval
 results on transport/model errors. A successful low relevance score is different
@@ -77,7 +77,13 @@ CROSS_ENCODER_DEVICE=mps /tmp/magworkspace-reranker-venv/bin/python docker/reran
 ```
 
 Point the backend's reranker URL at this process (`http://127.0.0.1:8091/rerank`
-for a native backend, `http://host.docker.internal:8091/rerank` from Docker Desktop).
+for a native backend). Native execution defaults to `HOST=127.0.0.1`, so it only
+accepts connections from the same host. The Docker image explicitly sets
+`HOST=0.0.0.0` for communication within its container network. These are the only
+accepted `HOST` values. If a backend in Docker Desktop must call a native process,
+explicitly start that process with `HOST=0.0.0.0` and use
+`http://host.docker.internal:8091/rerank`; this also exposes the authenticated
+service on the host's other IPv4 interfaces.
 Only the inference process needs the device setting. Keep the same API key on
 the backend and service. Native invocation is optional; the standard project
 infrastructure continues to use Compose.

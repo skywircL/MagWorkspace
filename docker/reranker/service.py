@@ -44,6 +44,7 @@ class Settings:
     model_id: str = MODEL_ID
     revision: str = REVISION
     requested_device: str = ""
+    host: str = "127.0.0.1"
     port: int = 8091
     max_client_batch_size: int = 200
     max_concurrent_requests: int = 200  # Pair permits, including queued requests.
@@ -74,8 +75,12 @@ class Settings:
             raise ConfigurationError("AUTO_TRUNCATE must be true or false")
         if env.get("DTYPE", "float32") != "float32":
             raise ConfigurationError("DTYPE must be float32")
+        host = env.get("HOST", "127.0.0.1")
+        if host not in {"127.0.0.1", "0.0.0.0"}:
+            raise ConfigurationError("HOST must be 127.0.0.1 or 0.0.0.0")
         return cls(
             api_key=key, model_id=model, revision=revision, requested_device=device,
+            host=host,
             port=integer(env, "PORT", 8091, 1, 65535),
             max_client_batch_size=integer(env, "MAX_CLIENT_BATCH_SIZE", 200, 1, 200),
             max_concurrent_requests=integer(env, "MAX_CONCURRENT_REQUESTS", 200, 1, 200),
@@ -360,7 +365,7 @@ def main():
     try:
         settings = Settings.from_env()
         encoder = CrossEncoder.load(settings)
-        server = Server(("0.0.0.0", settings.port), Application(settings, encoder))
+        server = Server((settings.host, settings.port), Application(settings, encoder))
     except ConfigurationError as exc:
         print(f"reranker: {exc}", file=sys.stderr)
         return 1
